@@ -22,7 +22,7 @@ WORKDIR /app
 COPY server/ ./server/
 RUN cd server && npx tsc
 
-# Production
+# Production image - v2
 FROM base AS production
 WORKDIR /app
 ENV NODE_ENV=production
@@ -32,9 +32,9 @@ COPY --from=deps /app/server/prisma ./server/prisma
 COPY --from=build-server /app/server/dist ./server/dist
 COPY --from=build-client /app/client/dist ./client/dist
 COPY server/package.json ./server/
+COPY server/start.sh ./server/start.sh
 
-RUN mkdir -p server/uploads
+RUN chmod +x server/start.sh && mkdir -p server/uploads
 
-EXPOSE 3001
-
-CMD ["sh", "-c", "echo 'Starting MediCard...' && echo \"PORT=$PORT\" && echo \"NODE_ENV=$NODE_ENV\" && cd server && echo 'Running prisma db push...' && npx prisma db push --skip-generate 2>&1 && echo 'Prisma done, starting server...' && node dist/index.js"]
+WORKDIR /app/server
+CMD ["sh", "start.sh"]
