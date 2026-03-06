@@ -5,7 +5,7 @@ export interface Deck {
   color: string;
   createdAt: string;
   updatedAt: string;
-  _count?: { cards: number };
+  cardCount?: number;
   dueCount?: number;
   masteredCount?: number;
 }

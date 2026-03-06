@@ -60,7 +60,7 @@ export default function Dashboard() {
   }
 
   const totalCards = decks.reduce(
-    (s, d) => s + (d._count?.cards ?? 0),
+    (s, d) => s + (d.cardCount ?? 0),
     0
   );
   const dueToday = decks.reduce((s, d) => s + (d.dueCount ?? 0), 0);
@@ -188,7 +188,7 @@ export default function Dashboard() {
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {decks.map((deck) => {
-              const cardCount = deck._count?.cards ?? 0;
+              const cardCount = deck.cardCount ?? 0;
               const due = deck.dueCount ?? 0;
               const masteredCount = deck.masteredCount ?? 0;
               const progress =

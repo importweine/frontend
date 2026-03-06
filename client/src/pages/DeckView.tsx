@@ -138,18 +138,9 @@ export default function DeckView() {
       for (const file of Array.from(files)) {
         await uploadFile(deckId!, file);
       }
-      const uploadsData = await getUploads(deckId!);
-      setUploads(uploadsData);
-      // Refresh cards after a delay to allow processing
-      setTimeout(async () => {
-        const [cardsData, statsData] = await Promise.all([
-          getCards({ deckId }),
-          getDeckStats(deckId!),
-        ]);
-        setCards(cardsData);
-        setStats(statsData);
-        window.dispatchEvent(new Event("medicard:decks-changed"));
-      }, 2000);
+      setUploads(await getUploads(deckId!));
+      // Poll for completion every 3s until all uploads are done
+      pollUploads();
     } catch (err) {
       alert(
         err instanceof Error ? err.message : "Fehler beim Hochladen"
@@ -157,6 +148,32 @@ export default function DeckView() {
     } finally {
       setUploading(false);
     }
+  }
+
+  function pollUploads() {
+    const interval = setInterval(async () => {
+      try {
+        const uploadsData = await getUploads(deckId!);
+        setUploads(uploadsData);
+        const allDone = uploadsData.every(
+          (u) => u.status === "COMPLETED" || u.status === "FAILED"
+        );
+        if (allDone) {
+          clearInterval(interval);
+          const [cardsData, statsData] = await Promise.all([
+            getCards({ deckId }),
+            getDeckStats(deckId!),
+          ]);
+          setCards(cardsData);
+          setStats(statsData);
+          window.dispatchEvent(new Event("medicard:decks-changed"));
+        }
+      } catch {
+        clearInterval(interval);
+      }
+    }, 3000);
+    // Stop polling after 5 minutes max
+    setTimeout(() => clearInterval(interval), 300000);
   }
 
   function handleDragOver(e: React.DragEvent) {
