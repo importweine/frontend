@@ -1,0 +1,62 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum CardSource {
+  MANUAL
+  AI_GENERATED
+}
+
+enum UploadStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model Deck {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  color       String   @default("#6366f1")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  cards   Card[]
+  uploads Upload[]
+}
+
+model Card {
+  id          String     @id @default(uuid())
+  deckId      String
+  front       String
+  back        String
+  imageUrl    String?
+  source      CardSource @default(MANUAL)
+  nextReview  DateTime   @default(now())
+  interval    Int        @default(0)
+  easeFactor  Float      @default(2.5)
+  repetitions Int        @default(0)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  deck Deck @relation(fields: [deckId], references: [id], onDelete: Cascade)
+}
+
+model Upload {
+  id           String       @id @default(uuid())
+  deckId       String
+  filename     String
+  originalName String
+  mimeType     String
+  status       UploadStatus @default(PENDING)
+  cardCount    Int          @default(0)
+  createdAt    DateTime     @default(now())
+
+  deck Deck @relation(fields: [deckId], references: [id], onDelete: Cascade)
+}
