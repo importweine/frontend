@@ -22,19 +22,17 @@ WORKDIR /app
 COPY server/ ./server/
 RUN cd server && npx tsc
 
-# Production image - v2
+# Production image - v3
 FROM base AS production
 WORKDIR /app
-ENV NODE_ENV=production
 
 COPY --from=deps /app/server/node_modules ./server/node_modules
 COPY --from=deps /app/server/prisma ./server/prisma
 COPY --from=build-server /app/server/dist ./server/dist
 COPY --from=build-client /app/client/dist ./client/dist
 COPY server/package.json ./server/
-COPY server/start.sh ./server/start.sh
 
-RUN chmod +x server/start.sh && mkdir -p server/uploads
+RUN mkdir -p server/uploads
 
 WORKDIR /app/server
-CMD ["sh", "start.sh"]
+CMD ["node", "dist/index.js"]
