@@ -37,4 +37,4 @@ RUN mkdir -p server/uploads
 
 EXPOSE 3001
 
-CMD ["sh", "-c", "cd server && npx prisma db push --skip-generate && node dist/index.js"]
+CMD ["sh", "-c", "echo 'Starting MediCard...' && echo \"PORT=$PORT\" && echo \"NODE_ENV=$NODE_ENV\" && cd server && echo 'Running prisma db push...' && npx prisma db push --skip-generate 2>&1 && echo 'Prisma done, starting server...' && node dist/index.js"]
