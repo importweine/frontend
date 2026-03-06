@@ -2,34 +2,41 @@ import OpenAI from "openai";
 import fs from "fs";
 import path from "path";
 import prisma from "../lib/prisma";
+import { PageChunk } from "./pdf";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
 const SYSTEM_PROMPT = `Du bist ein Experte für medizinisches Wissen und Lernkarten-Erstellung.
-Erstelle aus dem gegebenen Inhalt Lernkarten im Frage-Antwort-Format.
-Die Karten sollen medizinische Fachbegriffe, Definitionen, Verfahren und wichtige Fakten abdecken.
-Erstelle so viele Karten wie nötig, um den gesamten Inhalt abzudecken.
-Antworte NUR mit einem JSON-Objekt im Format: {"cards": [{"front": "Frage", "back": "Antwort"}, ...]}`;
+
+WICHTIGE REGELN:
+1. Erstelle Lernkarten NUR aus Informationen, die EXPLIZIT im bereitgestellten Text stehen.
+2. ERFINDE NICHTS DAZU. Wenn etwas unklar ist, formuliere die Karte entsprechend vorsichtig.
+3. Jede Karte MUSS einen Quellverweis enthalten: die Seitenzahl(en), von der die Information stammt.
+4. Decke den gesamten Inhalt systematisch ab - keine wichtigen Fakten auslassen.
+5. Verwende medizinische Fachbegriffe korrekt und vollständig.
+
+Antworte NUR mit einem JSON-Objekt im Format:
+{"cards": [{"front": "Frage", "back": "Antwort", "pages": [1, 2]}, ...]}
+
+Das "pages"-Feld enthält ein Array der Seitenzahlen, aus denen die Information stammt.`;
 
 interface GeneratedCard {
   front: string;
   back: string;
+  pages?: number[];
 }
 
 function parseCardsFromResponse(content: string): GeneratedCard[] {
   let jsonStr = content.trim();
 
-  // If wrapped in markdown code block, extract it
   const codeBlockMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (codeBlockMatch) {
     jsonStr = codeBlockMatch[1].trim();
   }
 
   const parsed = JSON.parse(jsonStr);
-
-  // Support both {"cards": [...]} and direct array format
   const items = Array.isArray(parsed) ? parsed : parsed?.cards;
 
   if (!Array.isArray(items)) {
@@ -49,11 +56,75 @@ function parseCardsFromResponse(content: string): GeneratedCard[] {
     .map((item: GeneratedCard) => ({
       front: item.front.trim(),
       back: item.back.trim(),
+      pages: Array.isArray(item.pages) ? item.pages : undefined,
     }));
 }
 
-export async function generateCardsFromText(
-  text: string,
+async function processChunk(
+  chunk: PageChunk,
+  retries: number = 2
+): Promise<GeneratedCard[]> {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          {
+            role: "user",
+            content: `Erstelle Lernkarten aus folgendem Textabschnitt (Seiten ${chunk.startPage}-${chunk.endPage}). Verwende NUR Informationen aus diesem Text. Gib bei jeder Karte die Seitenzahl(en) an.\n\n${chunk.text}`,
+          },
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0.3,
+        max_tokens: 16384,
+      });
+
+      const responseContent = completion.choices[0]?.message?.content;
+      if (!responseContent) {
+        throw new Error("Empty response from OpenAI");
+      }
+
+      return parseCardsFromResponse(responseContent);
+    } catch (error) {
+      if (attempt === retries) throw error;
+      console.warn(
+        `Chunk ${chunk.startPage}-${chunk.endPage} attempt ${attempt + 1} failed, retrying...`
+      );
+      await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+    }
+  }
+  return [];
+}
+
+// Max concurrent API calls to avoid rate limiting
+const MAX_CONCURRENCY = 3;
+
+async function processChunksConcurrently(
+  chunks: PageChunk[]
+): Promise<GeneratedCard[]> {
+  const allCards: GeneratedCard[] = [];
+
+  for (let i = 0; i < chunks.length; i += MAX_CONCURRENCY) {
+    const batch = chunks.slice(i, i + MAX_CONCURRENCY);
+    const results = await Promise.allSettled(
+      batch.map((chunk) => processChunk(chunk))
+    );
+
+    for (const result of results) {
+      if (result.status === "fulfilled") {
+        allCards.push(...result.value);
+      } else {
+        console.error("Chunk processing failed:", result.reason);
+      }
+    }
+  }
+
+  return allCards;
+}
+
+export async function generateCardsFromChunks(
+  chunks: PageChunk[],
   deckId: string,
   uploadId: string
 ): Promise<void> {
@@ -63,32 +134,14 @@ export async function generateCardsFromText(
       data: { status: "PROCESSING" },
     });
 
-    // Truncate text if too long (roughly 12k tokens worth)
-    const truncatedText = text.length > 48000 ? text.slice(0, 48000) : text;
+    console.log(
+      `Processing ${chunks.length} chunks (pages ${chunks[0]?.startPage}-${chunks[chunks.length - 1]?.endPage})`
+    );
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        {
-          role: "user",
-          content: `Erstelle Lernkarten aus folgendem Text:\n\n${truncatedText}`,
-        },
-      ],
-      response_format: { type: "json_object" },
-      temperature: 0.5,
-      max_tokens: 16384,
-    });
-
-    const responseContent = completion.choices[0]?.message?.content;
-    if (!responseContent) {
-      throw new Error("Empty response from OpenAI");
-    }
-
-    const cards = parseCardsFromResponse(responseContent);
+    const cards = await processChunksConcurrently(chunks);
 
     if (cards.length === 0) {
-      throw new Error("No valid cards generated from response");
+      throw new Error("No valid cards generated from any chunk");
     }
 
     await prisma.card.createMany({
@@ -97,8 +150,11 @@ export async function generateCardsFromText(
         front: card.front,
         back: card.back,
         source: "AI_GENERATED" as const,
+        sourcePages: card.pages ? card.pages.join(",") : null,
       })),
     });
+
+    console.log(`Generated ${cards.length} cards from ${chunks.length} chunks`);
 
     await prisma.upload.update({
       where: { id: uploadId },
@@ -108,12 +164,27 @@ export async function generateCardsFromText(
       },
     });
   } catch (error) {
-    console.error("Error generating cards from text:", error);
+    console.error("Error generating cards from chunks:", error);
     await prisma.upload.update({
       where: { id: uploadId },
       data: { status: "FAILED" },
     });
   }
+}
+
+export async function generateCardsFromText(
+  text: string,
+  deckId: string,
+  uploadId: string
+): Promise<void> {
+  // Legacy: used for non-chunked text (single page, small docs)
+  const chunk: PageChunk = {
+    startPage: 1,
+    endPage: 1,
+    text,
+    pageNumbers: [1],
+  };
+  return generateCardsFromChunks([chunk], deckId, uploadId);
 }
 
 export async function generateCardsFromImage(
@@ -148,7 +219,7 @@ export async function generateCardsFromImage(
           content: [
             {
               type: "text",
-              text: "Analysiere das folgende Bild und erstelle daraus medizinische Lernkarten.",
+              text: "Analysiere das folgende Bild und erstelle daraus medizinische Lernkarten. Verwende NUR Informationen, die im Bild sichtbar sind.",
             },
             {
               type: "image_url",
@@ -160,7 +231,7 @@ export async function generateCardsFromImage(
         },
       ],
       response_format: { type: "json_object" },
-      temperature: 0.5,
+      temperature: 0.3,
       max_tokens: 16384,
     });
 

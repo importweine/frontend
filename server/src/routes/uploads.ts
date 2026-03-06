@@ -2,8 +2,8 @@ import { Router, Request, Response } from "express";
 import multer from "multer";
 import path from "path";
 import prisma from "../lib/prisma";
-import { generateCardsFromText, generateCardsFromImage } from "../services/ai";
-import { extractTextFromPDF } from "../services/pdf";
+import { generateCardsFromChunks, generateCardsFromImage } from "../services/ai";
+import { extractPagesFromPDF, chunkPages } from "../services/pdf";
 
 const uploadsDir = path.join(__dirname, "../../uploads");
 
@@ -42,7 +42,7 @@ const upload = multer({
   storage,
   fileFilter,
   limits: {
-    fileSize: 20 * 1024 * 1024, // 20MB
+    fileSize: 50 * 1024 * 1024, // 50MB for large PDFs
   },
 });
 
@@ -85,8 +85,14 @@ router.post(
       const isPDF = file.mimetype === "application/pdf";
 
       if (isPDF) {
-        extractTextFromPDF(filePath)
-          .then((text) => generateCardsFromText(text, deckId, uploadRecord.id))
+        // Extract pages and chunk them for large documents
+        extractPagesFromPDF(filePath)
+          .then((pages) => {
+            console.log(`Extracted ${pages.length} pages from PDF`);
+            const chunks = chunkPages(pages, 30000); // ~7500 tokens per chunk
+            console.log(`Split into ${chunks.length} chunks for processing`);
+            return generateCardsFromChunks(chunks, deckId, uploadRecord.id);
+          })
           .catch(async (error) => {
             console.error("Error processing PDF upload:", error);
             await prisma.upload.update({

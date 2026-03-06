@@ -17,6 +17,7 @@ export interface Card {
   back: string;
   imageUrl: string | null;
   source: string;
+  sourcePages: string | null;
   nextReview: string;
   interval: number;
   easeFactor: number;

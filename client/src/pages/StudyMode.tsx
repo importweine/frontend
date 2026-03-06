@@ -293,6 +293,11 @@ export default function StudyMode() {
                   className="mt-6 max-h-48 rounded-xl object-contain"
                 />
               )}
+              {currentCard.sourcePages && (
+                <p className="mt-4 text-xs text-gray-400">
+                  Quelle: Seite {currentCard.sourcePages}
+                </p>
+              )}
             </div>
           </div>
         </div>

@@ -38,6 +38,7 @@ model Card {
   back        String
   imageUrl    String?
   source      CardSource @default(MANUAL)
+  sourcePages String?    // Comma-separated page numbers, e.g. "12,13"
   nextReview  DateTime   @default(now())
   interval    Int        @default(0)
   easeFactor  Float      @default(2.5)

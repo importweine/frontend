@@ -457,10 +457,16 @@ export default function DeckView() {
                         </p>
                       </div>
                       <div className="flex items-center gap-2 flex-shrink-0">
+                        {/* Source page badge */}
+                        {card.sourcePages && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-600">
+                            S. {card.sourcePages}
+                          </span>
+                        )}
                         {/* Source badge */}
                         <span
                           className={`text-xs px-2 py-0.5 rounded-full ${
-                            card.source === "ai"
+                            card.source === "AI_GENERATED"
                               ? "bg-purple-50 text-purple-600"
                               : "bg-gray-100 text-gray-500"
                           }`}
