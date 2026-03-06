@@ -32,12 +32,12 @@ export default function CardEditor() {
   useEffect(() => {
     async function load() {
       try {
-        const deckData = await getDeck(deckId);
+        const deckData = await getDeck(deckId!);
         setDeck(deckData);
 
         if (isEdit && cardId) {
-          const cards = await getCards({ deckId });
-          const card = cards.find((c: Card) => c.id === Number(cardId));
+          const cards = await getCards({ deckId: deckId! });
+          const card = cards.find((c: Card) => c.id === cardId);
           if (card) {
             setFront(card.front);
             setBack(card.back);
@@ -61,14 +61,14 @@ export default function CardEditor() {
     setSaving(true);
     try {
       if (isEdit && cardId) {
-        await updateCard(Number(cardId), {
+        await updateCard(cardId, {
           front: front.trim(),
           back: back.trim(),
           imageUrl: imageUrl,
         });
       } else {
         await createCard({
-          deckId,
+          deckId: deckId!,
           front: front.trim(),
           back: back.trim(),
           imageUrl: imageUrl ?? undefined,

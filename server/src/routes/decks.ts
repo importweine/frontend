@@ -19,18 +19,27 @@ router.get("/", async (_req: Request, res: Response) => {
 
     const decksWithCounts = await Promise.all(
       decks.map(async (deck) => {
-        const dueCount = await prisma.card.count({
-          where: {
-            deckId: deck.id,
-            nextReview: { lte: now },
-          },
-        });
+        const [dueCount, masteredCount] = await Promise.all([
+          prisma.card.count({
+            where: {
+              deckId: deck.id,
+              nextReview: { lte: now },
+            },
+          }),
+          prisma.card.count({
+            where: {
+              deckId: deck.id,
+              interval: { gt: 21 },
+            },
+          }),
+        ]);
 
+        const { _count, ...rest } = deck;
         return {
-          ...deck,
-          cardCount: deck._count.cards,
+          ...rest,
+          cardCount: _count.cards,
           dueCount,
-          _count: undefined,
+          masteredCount,
         };
       })
     );

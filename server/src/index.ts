@@ -4,6 +4,7 @@ dotenv.config();
 import express from "express";
 import cors from "cors";
 import path from "path";
+import fs from "fs";
 
 import decksRouter from "./routes/decks";
 import cardsRouter from "./routes/cards";
@@ -11,6 +12,12 @@ import uploadsRouter from "./routes/uploads";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+// Ensure uploads directory exists
+const uploadsPath = path.join(__dirname, "../uploads");
+if (!fs.existsSync(uploadsPath)) {
+  fs.mkdirSync(uploadsPath, { recursive: true });
+}
 
 // CORS - allow all origins in development
 app.use(cors());

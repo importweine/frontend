@@ -35,7 +35,7 @@ export default function StudyMode() {
     async function load() {
       try {
         const [deckData, cardsData] = await Promise.all([
-          getDeck(deckId),
+          getDeck(deckId!),
           getCards({ deckId, due: true }),
         ]);
         setDeck(deckData);

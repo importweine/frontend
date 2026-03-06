@@ -49,7 +49,7 @@ export default function DeckView() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<{
     type: "card" | "deck";
-    id?: number;
+    id?: string;
   } | null>(null);
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -59,10 +59,10 @@ export default function DeckView() {
   const loadData = useCallback(async () => {
     try {
       const [deckData, cardsData, statsData, uploadsData] = await Promise.all([
-        getDeck(deckId),
+        getDeck(deckId!),
         getCards({ deckId }),
-        getDeckStats(deckId),
-        getUploads(deckId),
+        getDeckStats(deckId!),
+        getUploads(deckId!),
       ]);
       setDeck(deckData);
       setCards(cardsData);
@@ -92,7 +92,7 @@ export default function DeckView() {
     setEditingName(false);
     if (nameValue.trim() !== deck.name) {
       try {
-        const updated = await updateDeck(deckId, { name: nameValue.trim() });
+        const updated = await updateDeck(deckId!, { name: nameValue.trim() });
         setDeck(updated);
         window.dispatchEvent(new Event("medicard:decks-changed"));
       } catch {
@@ -121,7 +121,7 @@ export default function DeckView() {
 
   async function handleDeleteDeck() {
     try {
-      await deleteDeck(deckId);
+      await deleteDeck(deckId!);
       window.dispatchEvent(new Event("medicard:decks-changed"));
       navigate("/");
     } catch (err) {
@@ -136,15 +136,15 @@ export default function DeckView() {
     setUploading(true);
     try {
       for (const file of Array.from(files)) {
-        await uploadFile(deckId, file);
+        await uploadFile(deckId!, file);
       }
-      const uploadsData = await getUploads(deckId);
+      const uploadsData = await getUploads(deckId!);
       setUploads(uploadsData);
       // Refresh cards after a delay to allow processing
       setTimeout(async () => {
         const [cardsData, statsData] = await Promise.all([
           getCards({ deckId }),
-          getDeckStats(deckId),
+          getDeckStats(deckId!),
         ]);
         setCards(cardsData);
         setStats(statsData);
@@ -186,25 +186,25 @@ export default function DeckView() {
 
   function getStatusBadge(status: UploadType["status"]) {
     switch (status) {
-      case "pending":
+      case "PENDING":
         return (
           <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">
             <Clock size={12} /> Wartend
           </span>
         );
-      case "processing":
+      case "PROCESSING":
         return (
           <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">
             <Loader2 size={12} className="animate-spin" /> Verarbeitung
           </span>
         );
-      case "completed":
+      case "COMPLETED":
         return (
           <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-green-50 text-green-600">
             <Check size={12} /> Abgeschlossen
           </span>
         );
-      case "failed":
+      case "FAILED":
         return (
           <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-red-50 text-red-600">
             <AlertCircle size={12} /> Fehlgeschlagen
@@ -465,7 +465,7 @@ export default function DeckView() {
                               : "bg-gray-100 text-gray-500"
                           }`}
                         >
-                          {card.source === "ai" ? "KI" : "Manuell"}
+                          {card.source === "AI_GENERATED" ? "KI" : "Manuell"}
                         </span>
                         {/* Review status */}
                         {isMastered ? (

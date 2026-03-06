@@ -7,11 +7,11 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-const SYSTEM_PROMPT =
-  "Du bist ein Experte für medizinisches Wissen und Lernkarten-Erstellung. Erstelle aus dem folgenden Text Lernkarten im Frage-Antwort-Format. Die Karten sollen medizinische Fachbegriffe, Definitionen, Verfahren und wichtige Fakten abdecken. Antworte NUR mit einem JSON-Array.";
-
-const JSON_FORMAT_INSTRUCTION =
-  'Antworte ausschließlich mit einem JSON-Array im Format: [{"front": "Frage", "back": "Antwort"}, ...]. Kein zusätzlicher Text.';
+const SYSTEM_PROMPT = `Du bist ein Experte für medizinisches Wissen und Lernkarten-Erstellung.
+Erstelle aus dem gegebenen Inhalt Lernkarten im Frage-Antwort-Format.
+Die Karten sollen medizinische Fachbegriffe, Definitionen, Verfahren und wichtige Fakten abdecken.
+Erstelle so viele Karten wie nötig, um den gesamten Inhalt abzudecken.
+Antworte NUR mit einem JSON-Objekt im Format: {"cards": [{"front": "Frage", "back": "Antwort"}, ...]}`;
 
 interface GeneratedCard {
   front: string;
@@ -19,7 +19,6 @@ interface GeneratedCard {
 }
 
 function parseCardsFromResponse(content: string): GeneratedCard[] {
-  // Try to extract JSON array from the response
   let jsonStr = content.trim();
 
   // If wrapped in markdown code block, extract it
@@ -30,11 +29,14 @@ function parseCardsFromResponse(content: string): GeneratedCard[] {
 
   const parsed = JSON.parse(jsonStr);
 
-  if (!Array.isArray(parsed)) {
-    throw new Error("Response is not a JSON array");
+  // Support both {"cards": [...]} and direct array format
+  const items = Array.isArray(parsed) ? parsed : parsed?.cards;
+
+  if (!Array.isArray(items)) {
+    throw new Error("Response is not a valid card array");
   }
 
-  return parsed
+  return items
     .filter(
       (item: unknown) =>
         typeof item === "object" &&
@@ -45,8 +47,8 @@ function parseCardsFromResponse(content: string): GeneratedCard[] {
         typeof (item as GeneratedCard).back === "string"
     )
     .map((item: GeneratedCard) => ({
-      front: item.front,
-      back: item.back,
+      front: item.front.trim(),
+      back: item.back.trim(),
     }));
 }
 
@@ -70,11 +72,12 @@ export async function generateCardsFromText(
         { role: "system", content: SYSTEM_PROMPT },
         {
           role: "user",
-          content: `${JSON_FORMAT_INSTRUCTION}\n\nText:\n${truncatedText}`,
+          content: `Erstelle Lernkarten aus folgendem Text:\n\n${truncatedText}`,
         },
       ],
-      temperature: 0.7,
-      max_tokens: 4096,
+      response_format: { type: "json_object" },
+      temperature: 0.5,
+      max_tokens: 16384,
     });
 
     const responseContent = completion.choices[0]?.message?.content;
@@ -145,7 +148,7 @@ export async function generateCardsFromImage(
           content: [
             {
               type: "text",
-              text: `${JSON_FORMAT_INSTRUCTION}\n\nAnalysiere das folgende Bild und erstelle daraus medizinische Lernkarten.`,
+              text: "Analysiere das folgende Bild und erstelle daraus medizinische Lernkarten.",
             },
             {
               type: "image_url",
@@ -156,8 +159,9 @@ export async function generateCardsFromImage(
           ],
         },
       ],
-      temperature: 0.7,
-      max_tokens: 4096,
+      response_format: { type: "json_object" },
+      temperature: 0.5,
+      max_tokens: 16384,
     });
 
     const responseContent = completion.choices[0]?.message?.content;

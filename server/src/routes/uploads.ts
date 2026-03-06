@@ -28,6 +28,7 @@ const fileFilter = (
     "image/png",
     "image/jpeg",
     "image/jpg",
+    "image/webp",
   ];
 
   if (allowedMimes.includes(file.mimetype)) {
