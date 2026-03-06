@@ -26,7 +26,7 @@ try {
   console.log("Database schema synced.");
 } catch (err) {
   console.error("Prisma db push failed:", err);
-  process.exit(1);
+  console.warn("Server will start anyway - database may need manual migration.");
 }
 
 const app = express();
