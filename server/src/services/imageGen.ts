@@ -47,25 +47,43 @@ async function resolveModelId(): Promise<string | null> {
     }
 
     const models = (await response.json()) as HedraModel[];
-    const model = models.find(
+    console.log("Available Hedra models:", JSON.stringify(models.map((m) => ({ id: m.id, name: m.name, type: m.type })), null, 2));
+
+    // Try exact name match first
+    const exactMatch = models.find(
       (m) => m.name === IMAGE_MODEL_NAME || m.name?.toLowerCase() === IMAGE_MODEL_NAME.toLowerCase()
     );
-
-    if (model) {
-      cachedModelId = model.id;
-      console.log(`Resolved Hedra model "${IMAGE_MODEL_NAME}" → ${model.id}`);
-      return model.id;
+    if (exactMatch) {
+      cachedModelId = exactMatch.id;
+      console.log(`Resolved Hedra model "${IMAGE_MODEL_NAME}" → ${exactMatch.id}`);
+      return exactMatch.id;
     }
 
-    // If exact name not found, try partial match
-    const partialMatch = models.find((m) => m.name?.toLowerCase().includes("grok"));
-    if (partialMatch) {
-      cachedModelId = partialMatch.id;
-      console.log(`Resolved Hedra model (partial) "${partialMatch.name}" → ${partialMatch.id}`);
-      return partialMatch.id;
+    // Try partial match, preferring image-related models over video
+    const imageModels = models.filter((m) => {
+      const name = m.name?.toLowerCase() || "";
+      const type = m.type?.toLowerCase() || "";
+      // Exclude video models
+      if (name.includes("video") || type.includes("video") || name.includes("i2v") || name.includes("t2v")) return false;
+      // Look for image-related models with "grok" or "imagine"
+      return name.includes("grok") || name.includes("imagine") || name.includes("image");
+    });
+
+    if (imageModels.length > 0) {
+      cachedModelId = imageModels[0].id;
+      console.log(`Resolved Hedra image model "${imageModels[0].name}" → ${imageModels[0].id}`);
+      return imageModels[0].id;
     }
 
-    console.error(`Hedra model "${IMAGE_MODEL_NAME}" not found. Available:`, models.map((m) => m.name).join(", "));
+    // Last resort: any model with "imagine" in the name
+    const imagineMatch = models.find((m) => m.name?.toLowerCase().includes("imagine"));
+    if (imagineMatch) {
+      cachedModelId = imagineMatch.id;
+      console.log(`Resolved Hedra model (imagine) "${imagineMatch.name}" → ${imagineMatch.id}`);
+      return imagineMatch.id;
+    }
+
+    console.error(`Hedra model "${IMAGE_MODEL_NAME}" not found. Available:`, models.map((m) => `${m.name} (${m.type || "unknown"})`).join(", "));
     return null;
   } catch (error) {
     console.error("Failed to resolve Hedra model ID:", error);
