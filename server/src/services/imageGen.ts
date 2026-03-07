@@ -1,7 +1,10 @@
 import prisma from "../lib/prisma";
+import path from "path";
+import fs from "fs";
 
 // Hedra API Configuration (Legacy API — the only one actually used)
 const HEDRA_API_BASE = "https://api.hedra.com/web-app/public";
+const UPLOADS_DIR = path.join(__dirname, "../../uploads");
 
 // xAI / Grok Imagine T2I — Text-to-Image model
 const IMAGE_MODEL_NAME = "Grok Imagine T2I";
@@ -325,6 +328,44 @@ async function generateSingleImage(prompt: string): Promise<string | null> {
   }
 }
 
+/**
+ * Download an external image and save it locally to /uploads.
+ * Returns the local path (e.g. "/uploads/gen-abc123.png") or null on failure.
+ */
+async function downloadImageLocally(externalUrl: string): Promise<string | null> {
+  try {
+    console.log(`[ImageGen] Downloading image from: ${externalUrl.substring(0, 120)}`);
+    const response = await fetch(externalUrl);
+    if (!response.ok) {
+      console.error(`[ImageGen] Download failed (${response.status}) for ${externalUrl.substring(0, 80)}`);
+      return null;
+    }
+
+    const contentType = response.headers.get("content-type") || "image/png";
+    const ext = contentType.includes("jpeg") || contentType.includes("jpg") ? ".jpg"
+      : contentType.includes("webp") ? ".webp"
+      : ".png";
+
+    const filename = `gen-${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
+    const filePath = path.join(UPLOADS_DIR, filename);
+
+    // Ensure uploads directory exists
+    if (!fs.existsSync(UPLOADS_DIR)) {
+      fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+    }
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    fs.writeFileSync(filePath, buffer);
+
+    const localUrl = `/uploads/${filename}`;
+    console.log(`[ImageGen] Saved locally → ${localUrl} (${Math.round(buffer.length / 1024)}KB)`);
+    return localUrl;
+  } catch (error) {
+    console.error(`[ImageGen] Failed to download image:`, error);
+    return null;
+  }
+}
+
 function buildImagePrompt(front: string, back: string): string {
   const combined = `${front} - ${back}`;
   return combined.length > 200 ? combined.substring(0, 200) + "..." : combined;
@@ -341,17 +382,21 @@ async function generateImageForCard(cardId: string): Promise<void> {
     });
 
     const prompt = buildImagePrompt(card.front, card.back);
-    const imageUrl = await generateSingleImage(prompt);
+    const externalUrl = await generateSingleImage(prompt);
 
-    if (imageUrl) {
+    if (externalUrl) {
+      // Download externally-hosted image to local /uploads to avoid mobile CORS/blocking issues
+      const localUrl = await downloadImageLocally(externalUrl);
+      const finalUrl = localUrl || externalUrl; // Fallback to external if download fails
+
       await prisma.card.update({
         where: { id: cardId },
         data: {
-          imageUrl,
+          imageUrl: finalUrl,
           imageStatus: "COMPLETED",
         },
       });
-      console.log(`[ImageGen] Image generated for card ${cardId}`);
+      console.log(`[ImageGen] Image saved for card ${cardId}: ${finalUrl}`);
     } else {
       await prisma.card.update({
         where: { id: cardId },
