@@ -446,8 +446,9 @@ export async function generateImagesForCards(cardIds: string[]): Promise<void> {
 }
 
 /**
- * One-time migration: download all external image URLs to local /uploads.
- * Safe to call multiple times — skips cards that already have local URLs.
+ * One-time migration: cards with expired external image URLs get their
+ * images regenerated. Downloads are attempted first; on failure the card
+ * is queued for fresh AI generation.
  */
 export async function migrateExternalImages(): Promise<void> {
   const cards = await prisma.card.findMany({
@@ -467,10 +468,10 @@ export async function migrateExternalImages(): Promise<void> {
     return;
   }
 
-  console.log(`[Migration] Found ${externalCards.length} cards with external image URLs, downloading...`);
+  console.log(`[Migration] Found ${externalCards.length} cards with external image URLs`);
 
-  let success = 0;
-  let failed = 0;
+  let downloaded = 0;
+  const regenerateIds: string[] = [];
 
   for (const card of externalCards) {
     const localUrl = await downloadImageLocally(card.imageUrl!);
@@ -479,11 +480,22 @@ export async function migrateExternalImages(): Promise<void> {
         where: { id: card.id },
         data: { imageUrl: localUrl },
       });
-      success++;
+      downloaded++;
     } else {
-      failed++;
+      // External URL expired/blocked — clear it and queue for regeneration
+      await prisma.card.update({
+        where: { id: card.id },
+        data: { imageUrl: null, imageStatus: "NONE" },
+      });
+      regenerateIds.push(card.id);
     }
   }
 
-  console.log(`[Migration] Done: ${success} migrated, ${failed} failed`);
+  console.log(`[Migration] ${downloaded} downloaded, ${regenerateIds.length} queued for regeneration`);
+
+  if (regenerateIds.length > 0 && process.env.HEDRA_API) {
+    generateImagesForCards(regenerateIds).catch((err) =>
+      console.error("[Migration] Regeneration error:", err)
+    );
+  }
 }
