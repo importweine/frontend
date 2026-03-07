@@ -1,16 +1,116 @@
 import prisma from "../lib/prisma";
 
-const HEDRA_API_BASE = "https://api.hedra.com";
-const IMAGE_MODEL = "grok_imagine"; // 3 credits/generation - best price/quality ratio
+const HEDRA_API_BASE = "https://api.hedra.com/web-app/public";
+const IMAGE_MODEL_NAME = "grok_imagine"; // 3 credits/generation
 const MAX_IMAGE_CONCURRENCY = 5;
+const POLL_INTERVAL_MS = 3000;
+const MAX_POLL_ATTEMPTS = 60; // 3 minutes max wait per image
 
 const CAT_BASE_PROMPT = `A photorealistic photograph of a cute real cat in a playful scene. The cat is naturally interacting with or surrounded by real objects and settings related to the following concept. The photo has warm natural lighting, shallow depth of field, and looks like it was taken with a high-end camera. Absolutely no text, no letters, no numbers, no words anywhere in the image. Concept: `;
 
-interface HedraImageResponse {
-  images?: Array<{ url: string; content_type?: string }>;
+// Cache the model UUID so we only look it up once
+let cachedModelId: string | null = null;
+
+interface HedraModel {
+  id: string;
+  name: string;
+  type?: string;
+}
+
+interface HedraGeneration {
+  id: string;
+  status: string;
+  result_url?: string;
   url?: string;
   error?: string;
-  detail?: string;
+}
+
+function getHeaders(): Record<string, string> {
+  const apiKey = process.env.HEDRA_API;
+  return {
+    "Content-Type": "application/json",
+    "X-API-Key": apiKey || "",
+  };
+}
+
+async function resolveModelId(): Promise<string | null> {
+  if (cachedModelId) return cachedModelId;
+
+  try {
+    const response = await fetch(`${HEDRA_API_BASE}/models`, {
+      headers: getHeaders(),
+    });
+
+    if (!response.ok) {
+      console.error(`Failed to fetch Hedra models (${response.status}):`, await response.text());
+      return null;
+    }
+
+    const models = (await response.json()) as HedraModel[];
+    const model = models.find(
+      (m) => m.name === IMAGE_MODEL_NAME || m.name?.toLowerCase() === IMAGE_MODEL_NAME.toLowerCase()
+    );
+
+    if (model) {
+      cachedModelId = model.id;
+      console.log(`Resolved Hedra model "${IMAGE_MODEL_NAME}" → ${model.id}`);
+      return model.id;
+    }
+
+    // If exact name not found, try partial match
+    const partialMatch = models.find((m) => m.name?.toLowerCase().includes("grok"));
+    if (partialMatch) {
+      cachedModelId = partialMatch.id;
+      console.log(`Resolved Hedra model (partial) "${partialMatch.name}" → ${partialMatch.id}`);
+      return partialMatch.id;
+    }
+
+    console.error(`Hedra model "${IMAGE_MODEL_NAME}" not found. Available:`, models.map((m) => m.name).join(", "));
+    return null;
+  } catch (error) {
+    console.error("Failed to resolve Hedra model ID:", error);
+    return null;
+  }
+}
+
+async function pollGeneration(generationId: string): Promise<string | null> {
+  const headers = getHeaders();
+
+  for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+
+    try {
+      const response = await fetch(`${HEDRA_API_BASE}/generations/${generationId}/status`, {
+        headers,
+      });
+
+      if (!response.ok) {
+        console.error(`Poll error (${response.status}) for generation ${generationId}`);
+        continue;
+      }
+
+      const data = (await response.json()) as HedraGeneration;
+
+      if (data.status === "completed" || data.status === "complete" || data.status === "succeeded") {
+        const url = data.result_url || data.url;
+        if (url) return url;
+        console.error(`Generation ${generationId} completed but no URL in response:`, JSON.stringify(data));
+        return null;
+      }
+
+      if (data.status === "failed" || data.status === "error") {
+        console.error(`Generation ${generationId} failed:`, data.error || JSON.stringify(data));
+        return null;
+      }
+
+      // Still processing, continue polling
+    } catch (error) {
+      console.error(`Poll network error for generation ${generationId}:`, error);
+    }
+  }
+
+  console.error(`Generation ${generationId} timed out after ${MAX_POLL_ATTEMPTS * POLL_INTERVAL_MS / 1000}s`);
+  return null;
 }
 
 async function generateSingleImage(prompt: string): Promise<string | null> {
@@ -20,90 +120,55 @@ async function generateSingleImage(prompt: string): Promise<string | null> {
     return null;
   }
 
+  const modelId = await resolveModelId();
+  if (!modelId) {
+    console.error("Cannot generate image: model ID not resolved");
+    return null;
+  }
+
   const fullPrompt = CAT_BASE_PROMPT + prompt;
 
   try {
-    // Try the legacy text-to-image endpoint
-    const response = await fetch(`${HEDRA_API_BASE}/v1/images/text-to-image`, {
+    const response = await fetch(`${HEDRA_API_BASE}/generations`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${apiKey}`,
-        "X-API-Key": apiKey,
-      },
+      headers: getHeaders(),
       body: JSON.stringify({
-        prompt: fullPrompt,
-        model: IMAGE_MODEL,
-        width: 1024,
-        height: 576,
-        aspect_ratio: "16:9",
+        type: "image",
+        ai_model_id: modelId,
+        generated_image_inputs: {
+          text_prompt: fullPrompt,
+          aspect_ratio: "16:9",
+          seed: Math.floor(Math.random() * 1000000),
+        },
       }),
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(`Hedra API error (${response.status}):`, errorText);
-
-      // If legacy endpoint fails, try the portrait endpoint
-      if (response.status === 404 || response.status === 405) {
-        return await tryPortraitEndpoint(fullPrompt, apiKey);
-      }
+      console.error(`Hedra generation request failed (${response.status}):`, errorText);
       return null;
     }
 
-    const data = (await response.json()) as HedraImageResponse;
+    const data = (await response.json()) as HedraGeneration;
+    const generationId = data.id;
 
-    // Handle different response formats
-    if (data.images && data.images.length > 0 && data.images[0].url) {
-      return data.images[0].url;
-    }
-    if (data.url) {
-      return data.url;
+    if (!generationId) {
+      console.error("No generation ID in Hedra response:", JSON.stringify(data));
+      return null;
     }
 
-    console.error("Unexpected Hedra response format:", JSON.stringify(data));
-    return null;
+    console.log(`Hedra generation started: ${generationId}`);
+
+    // Poll for completion
+    return await pollGeneration(generationId);
   } catch (error) {
     console.error("Hedra image generation failed:", error);
     return null;
   }
 }
 
-async function tryPortraitEndpoint(prompt: string, apiKey: string): Promise<string | null> {
-  try {
-    const response = await fetch(`${HEDRA_API_BASE}/v1/portrait`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${apiKey}`,
-        "X-API-Key": apiKey,
-      },
-      body: JSON.stringify({
-        prompt,
-        model: IMAGE_MODEL,
-        aspect_ratio: "16:9",
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`Hedra portrait endpoint error (${response.status}):`, errorText);
-      return null;
-    }
-
-    const data = (await response.json()) as HedraImageResponse;
-    return data.url || data.images?.[0]?.url || null;
-  } catch (error) {
-    console.error("Hedra portrait endpoint failed:", error);
-    return null;
-  }
-}
-
 function buildImagePrompt(front: string, back: string): string {
-  // Combine card content into a concise prompt for image generation
-  // Keep it short to stay focused
   const combined = `${front} - ${back}`;
-  // Truncate to ~200 chars to keep the prompt focused
   return combined.length > 200 ? combined.substring(0, 200) + "..." : combined;
 }
 
