@@ -175,14 +175,17 @@ async function pollGeneration(generationId: string): Promise<string | null> {
       const status = normalizeStatus(data);
 
       if (status === "completed") {
+        console.log(`[Poll] Generation ${generationId} completed. Response keys: ${Object.keys(data).join(", ")}`);
+        console.log(`[Poll] Full response: ${JSON.stringify(data).substring(0, 1000)}`);
+
         const url = extractImageUrl(data);
         if (url) {
-          console.log(`[Poll] Generation ${generationId} completed → ${url.substring(0, 80)}...`);
+          console.log(`[Poll] Generation ${generationId} → ${url.substring(0, 120)}`);
           return url;
         }
 
         // Fallback: fetch from generations list if status endpoint doesn't have URL
-        console.warn(`[Poll] Generation ${generationId} completed but no URL in status response, trying list fallback...`);
+        console.warn(`[Poll] No URL in status response, trying list fallback...`);
         return await fetchUrlFromGenerationsList(generationId);
       }
 
@@ -219,17 +222,34 @@ async function fetchUrlFromGenerationsList(generationId: string): Promise<string
       return null;
     }
 
-    const generations = (await response.json()) as Array<Record<string, unknown>>;
+    const raw = await response.json();
+    console.log(`[Fallback] Generations response type: ${typeof raw}, isArray: ${Array.isArray(raw)}`);
+    if (!Array.isArray(raw)) {
+      console.log(`[Fallback] Response keys: ${Object.keys(raw).join(", ")}`);
+    }
+
+    // API might return { generations: [...] } or { data: [...] } or directly [...]
+    const generations: Array<Record<string, unknown>> = Array.isArray(raw)
+      ? raw
+      : (raw.generations || raw.data || raw.items || raw.results || []) as Array<Record<string, unknown>>;
+
+    if (!Array.isArray(generations)) {
+      console.error(`[Fallback] Could not extract array from response:`, JSON.stringify(raw).substring(0, 500));
+      return null;
+    }
+
     const found = generations.find((g) => g.id === generationId);
     if (found) {
+      console.log(`[Fallback] Found generation in list. Keys: ${Object.keys(found).join(", ")}`);
+      console.log(`[Fallback] Generation data: ${JSON.stringify(found).substring(0, 1000)}`);
       const url = extractImageUrl(found);
       if (url) {
-        console.log(`[Fallback] Found URL in generations list → ${url.substring(0, 80)}...`);
+        console.log(`[Fallback] Found URL → ${url.substring(0, 120)}`);
         return url;
       }
     }
 
-    console.error(`[Fallback] Generation ${generationId} not found in list or no URL`);
+    console.error(`[Fallback] Generation ${generationId} not found or no URL in ${generations.length} items`);
     return null;
   } catch (error) {
     console.error(`[Fallback] Error fetching generations list:`, error);
