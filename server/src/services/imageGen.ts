@@ -35,8 +35,8 @@ async function generateSingleImage(prompt: string): Promise<string | null> {
         prompt: fullPrompt,
         model: IMAGE_MODEL,
         width: 1024,
-        height: 1024,
-        aspect_ratio: "1:1",
+        height: 576,
+        aspect_ratio: "16:9",
       }),
     });
 
@@ -81,7 +81,7 @@ async function tryPortraitEndpoint(prompt: string, apiKey: string): Promise<stri
       body: JSON.stringify({
         prompt,
         model: IMAGE_MODEL,
-        aspect_ratio: "1:1",
+        aspect_ratio: "16:9",
       }),
     });
 
