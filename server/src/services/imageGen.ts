@@ -444,3 +444,46 @@ export async function generateImagesForCards(cardIds: string[]): Promise<void> {
 
   console.log(`[ImageGen] Generation completed for ${cardIds.length} cards`);
 }
+
+/**
+ * One-time migration: download all external image URLs to local /uploads.
+ * Safe to call multiple times — skips cards that already have local URLs.
+ */
+export async function migrateExternalImages(): Promise<void> {
+  const cards = await prisma.card.findMany({
+    where: {
+      imageUrl: { not: null },
+      imageStatus: "COMPLETED",
+    },
+    select: { id: true, imageUrl: true },
+  });
+
+  const externalCards = cards.filter(
+    (c) => c.imageUrl && c.imageUrl.startsWith("http")
+  );
+
+  if (externalCards.length === 0) {
+    console.log("[Migration] No external image URLs to migrate");
+    return;
+  }
+
+  console.log(`[Migration] Found ${externalCards.length} cards with external image URLs, downloading...`);
+
+  let success = 0;
+  let failed = 0;
+
+  for (const card of externalCards) {
+    const localUrl = await downloadImageLocally(card.imageUrl!);
+    if (localUrl) {
+      await prisma.card.update({
+        where: { id: card.id },
+        data: { imageUrl: localUrl },
+      });
+      success++;
+    } else {
+      failed++;
+    }
+  }
+
+  console.log(`[Migration] Done: ${success} migrated, ${failed} failed`);
+}

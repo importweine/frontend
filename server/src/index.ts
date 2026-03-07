@@ -10,6 +10,7 @@ import fs from "fs";
 import decksRouter from "./routes/decks";
 import cardsRouter from "./routes/cards";
 import uploadsRouter from "./routes/uploads";
+import { migrateExternalImages } from "./services/imageGen";
 
 console.log("=== MediCard Startup ===");
 console.log("PORT:", process.env.PORT);
@@ -66,6 +67,11 @@ if (process.env.NODE_ENV === "production") {
 
 app.listen(PORT, () => {
   console.log(`MediCard server running on port ${PORT}`);
+
+  // Migrate external image URLs to local storage (runs in background, non-blocking)
+  migrateExternalImages().catch((err) =>
+    console.error("[Migration] Failed:", err)
+  );
 });
 
 export default app;
