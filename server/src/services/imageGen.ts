@@ -3,8 +3,9 @@ import prisma from "../lib/prisma";
 // Hedra API Configuration (Legacy API — the only one actually used)
 const HEDRA_API_BASE = "https://api.hedra.com/web-app/public";
 
-// Nano Banana Pro I2I — confirmed working model
-const IMAGE_MODEL_ID = "c81e401b-6036-4e1f-9165-60eafcee9dd3";
+// xAI / Grok Imagine T2I — Text-to-Image model
+const IMAGE_MODEL_NAME = "Grok Imagine T2I";
+let cachedModelId: string | null = null;
 
 const MAX_IMAGE_CONCURRENCY = 5;
 
@@ -25,6 +26,70 @@ function getHeaders(): Record<string, string> {
     "Content-Type": "application/json",
     "X-API-Key": getApiKey(),
   };
+}
+
+/**
+ * Dynamically resolve the xAI / Grok Imagine T2I model UUID.
+ * Cached after first successful lookup.
+ */
+async function resolveModelId(): Promise<string | null> {
+  if (cachedModelId) return cachedModelId;
+
+  try {
+    const response = await fetch(`${HEDRA_API_BASE}/models`, {
+      headers: getHeaders(),
+    });
+
+    if (!response.ok) {
+      console.error(`[ModelLookup] Failed to fetch models (${response.status}):`, await response.text());
+      return null;
+    }
+
+    const models = (await response.json()) as Array<Record<string, unknown>>;
+    console.log(`[ModelLookup] Available: ${models.map((m) => `${m.name} (${m.type || "?"})`).join(", ")}`);
+
+    // Exact match first
+    const exact = models.find(
+      (m) => String(m.name).toLowerCase() === IMAGE_MODEL_NAME.toLowerCase()
+    );
+    if (exact) {
+      cachedModelId = exact.id as string;
+      console.log(`[ModelLookup] Resolved "${IMAGE_MODEL_NAME}" → ${cachedModelId}`);
+      return cachedModelId;
+    }
+
+    // Partial match: any Grok Imagine T2I variant
+    const partial = models.find((m) => {
+      const name = String(m.name || "").toLowerCase();
+      return (name.includes("grok") || name.includes("xai") || name.includes("x.ai"))
+        && name.includes("imagine")
+        && (name.includes("t2i") || name.includes("text"));
+    });
+    if (partial) {
+      cachedModelId = partial.id as string;
+      console.log(`[ModelLookup] Partial match "${partial.name}" → ${cachedModelId}`);
+      return cachedModelId;
+    }
+
+    // Broader fallback: any T2I image model (not I2I, not video)
+    const anyT2I = models.find((m) => {
+      const name = String(m.name || "").toLowerCase();
+      const type = String(m.type || "").toLowerCase();
+      if (name.includes("i2i") || name.includes("video") || name.includes("i2v") || name.includes("t2v")) return false;
+      return type === "image" || name.includes("t2i");
+    });
+    if (anyT2I) {
+      cachedModelId = anyT2I.id as string;
+      console.log(`[ModelLookup] Fallback T2I "${anyT2I.name}" → ${cachedModelId}`);
+      return cachedModelId;
+    }
+
+    console.error(`[ModelLookup] No suitable image model found`);
+    return null;
+  } catch (error) {
+    console.error(`[ModelLookup] Error:`, error);
+    return null;
+  }
 }
 
 /**
@@ -183,13 +248,19 @@ async function generateSingleImage(prompt: string): Promise<string | null> {
     return null;
   }
 
+  const modelId = await resolveModelId();
+  if (!modelId) {
+    console.error("[ImageGen] Cannot generate: model ID not resolved");
+    return null;
+  }
+
   const fullPrompt = CAT_BASE_PROMPT + prompt;
 
   // Flat payload — NO nested objects (critical for Hedra Legacy API)
   const payload: Record<string, unknown> = {
     type: "image",
     text_prompt: fullPrompt,
-    ai_model_id: IMAGE_MODEL_ID,
+    ai_model_id: modelId,
     aspect_ratio: "16:9",
     resolution: "1K",
   };
