@@ -1,7 +1,7 @@
 import prisma from "../lib/prisma";
 
 const HEDRA_API_BASE = "https://api.hedra.com/web-app/public";
-const IMAGE_MODEL_NAME = "grok_imagine"; // 3 credits/generation
+const IMAGE_MODEL_NAME = "Grok Imagine T2I"; // Text-to-Image, 3 credits/generation
 const MAX_IMAGE_CONCURRENCY = 5;
 const POLL_INTERVAL_MS = 3000;
 const MAX_POLL_ATTEMPTS = 60; // 3 minutes max wait per image
@@ -47,7 +47,7 @@ async function resolveModelId(): Promise<string | null> {
     }
 
     const models = (await response.json()) as HedraModel[];
-    console.log("Available Hedra models:", JSON.stringify(models.map((m) => ({ id: m.id, name: m.name, type: m.type })), null, 2));
+    console.log(`Available Hedra models: ${models.map((m) => `${m.name} (${m.type || "unknown"})`).join(", ")}`);
 
     // Try exact name match first
     const exactMatch = models.find(
@@ -59,28 +59,30 @@ async function resolveModelId(): Promise<string | null> {
       return exactMatch.id;
     }
 
-    // Try partial match, preferring image-related models over video
+    // Try partial match, preferring T2I (Text-to-Image) models
+    const t2iModels = models.filter((m) => {
+      const name = m.name?.toLowerCase() || "";
+      return name.includes("grok") && name.includes("imagine") && name.includes("t2i");
+    });
+
+    if (t2iModels.length > 0) {
+      cachedModelId = t2iModels[0].id;
+      console.log(`Resolved Hedra T2I model "${t2iModels[0].name}" → ${t2iModels[0].id}`);
+      return t2iModels[0].id;
+    }
+
+    // Fallback: any Grok Imagine model that is NOT I2I or video
     const imageModels = models.filter((m) => {
       const name = m.name?.toLowerCase() || "";
       const type = m.type?.toLowerCase() || "";
-      // Exclude video models
-      if (name.includes("video") || type.includes("video") || name.includes("i2v") || name.includes("t2v")) return false;
-      // Look for image-related models with "grok" or "imagine"
-      return name.includes("grok") || name.includes("imagine") || name.includes("image");
+      if (name.includes("video") || type.includes("video") || name.includes("i2v") || name.includes("t2v") || name.includes("i2i")) return false;
+      return name.includes("grok") && name.includes("imagine");
     });
 
     if (imageModels.length > 0) {
       cachedModelId = imageModels[0].id;
       console.log(`Resolved Hedra image model "${imageModels[0].name}" → ${imageModels[0].id}`);
       return imageModels[0].id;
-    }
-
-    // Last resort: any model with "imagine" in the name
-    const imagineMatch = models.find((m) => m.name?.toLowerCase().includes("imagine"));
-    if (imagineMatch) {
-      cachedModelId = imagineMatch.id;
-      console.log(`Resolved Hedra model (imagine) "${imagineMatch.name}" → ${imagineMatch.id}`);
-      return imagineMatch.id;
     }
 
     console.error(`Hedra model "${IMAGE_MODEL_NAME}" not found. Available:`, models.map((m) => `${m.name} (${m.type || "unknown"})`).join(", "));
@@ -147,67 +149,43 @@ async function generateSingleImage(prompt: string): Promise<string | null> {
   const fullPrompt = CAT_BASE_PROMPT + prompt;
   const seed = Math.floor(Math.random() * 1000000);
 
-  // Try multiple body formats - the API docs are inconsistent
-  const bodyVariants = [
-    {
-      name: "generated_image_inputs",
-      body: {
-        type: "image",
-        ai_model_id: modelId,
-        generated_image_inputs: {
-          text_prompt: fullPrompt,
-          aspect_ratio: "16:9",
-          seed,
-        },
-      },
+  const body = {
+    type: "image",
+    ai_model_id: modelId,
+    image: {
+      text_prompt: fullPrompt,
+      aspect_ratio: "16:9",
+      seed,
     },
-    {
-      name: "image",
-      body: {
-        type: "image",
-        ai_model_id: modelId,
-        image: {
-          text_prompt: fullPrompt,
-          aspect_ratio: "16:9",
-          seed,
-        },
-      },
-    },
-  ];
+  };
 
-  for (const variant of bodyVariants) {
-    try {
-      console.log(`Trying Hedra generation with body key: ${variant.name}`);
+  try {
+    const response = await fetch(`${HEDRA_API_BASE}/generations`, {
+      method: "POST",
+      headers: getHeaders(),
+      body: JSON.stringify(body),
+    });
 
-      const response = await fetch(`${HEDRA_API_BASE}/generations`, {
-        method: "POST",
-        headers: getHeaders(),
-        body: JSON.stringify(variant.body),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error(`Hedra generation failed with "${variant.name}" (${response.status}):`, errorText);
-        continue; // Try next variant
-      }
-
-      const data = (await response.json()) as HedraGeneration;
-      const generationId = data.id;
-
-      if (!generationId) {
-        console.error("No generation ID in Hedra response:", JSON.stringify(data));
-        return null;
-      }
-
-      console.log(`Hedra generation started (${variant.name}): ${generationId}`);
-      return await pollGeneration(generationId);
-    } catch (error) {
-      console.error(`Hedra generation error with "${variant.name}":`, error);
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`Hedra generation failed (${response.status}):`, errorText);
+      return null;
     }
-  }
 
-  console.error("All Hedra body variants failed");
-  return null;
+    const data = (await response.json()) as HedraGeneration;
+    const generationId = data.id;
+
+    if (!generationId) {
+      console.error("No generation ID in Hedra response:", JSON.stringify(data));
+      return null;
+    }
+
+    console.log(`Hedra generation started: ${generationId}`);
+    return await pollGeneration(generationId);
+  } catch (error) {
+    console.error("Hedra generation error:", error);
+    return null;
+  }
 }
 
 function buildImagePrompt(front: string, back: string): string {
