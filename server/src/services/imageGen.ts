@@ -4,7 +4,7 @@ const HEDRA_API_BASE = "https://api.hedra.com";
 const IMAGE_MODEL = "grok_imagine"; // 3 credits/generation - best price/quality ratio
 const MAX_IMAGE_CONCURRENCY = 5;
 
-const CAT_BASE_PROMPT = `A playful whimsical illustration of a cute cartoon cat in a soft watercolor style. The cat is cheerfully interacting with or surrounded by visual elements that represent the following concept. The scene is colorful, warm, and memorable. Absolutely no text, no letters, no numbers, no words anywhere in the image. Pure visual illustration only. Concept: `;
+const CAT_BASE_PROMPT = `A photorealistic photograph of a cute real cat in a playful scene. The cat is naturally interacting with or surrounded by real objects and settings related to the following concept. The photo has warm natural lighting, shallow depth of field, and looks like it was taken with a high-end camera. Absolutely no text, no letters, no numbers, no words anywhere in the image. Concept: `;
 
 interface HedraImageResponse {
   images?: Array<{ url: string; content_type?: string }>;
