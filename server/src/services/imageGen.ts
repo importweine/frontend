@@ -222,16 +222,17 @@ async function fetchUrlFromGenerationsList(generationId: string): Promise<string
       return null;
     }
 
-    const raw = await response.json();
+    const raw = (await response.json()) as Record<string, unknown> | Array<Record<string, unknown>>;
     console.log(`[Fallback] Generations response type: ${typeof raw}, isArray: ${Array.isArray(raw)}`);
     if (!Array.isArray(raw)) {
-      console.log(`[Fallback] Response keys: ${Object.keys(raw).join(", ")}`);
+      console.log(`[Fallback] Response keys: ${Object.keys(raw as Record<string, unknown>).join(", ")}`);
     }
 
     // API might return { generations: [...] } or { data: [...] } or directly [...]
+    const obj = raw as Record<string, unknown>;
     const generations: Array<Record<string, unknown>> = Array.isArray(raw)
       ? raw
-      : (raw.generations || raw.data || raw.items || raw.results || []) as Array<Record<string, unknown>>;
+      : (obj.generations || obj.data || obj.items || obj.results || []) as Array<Record<string, unknown>>;
 
     if (!Array.isArray(generations)) {
       console.error(`[Fallback] Could not extract array from response:`, JSON.stringify(raw).substring(0, 500));
