@@ -2,6 +2,19 @@ import type { Deck, Card, Upload, DeckStats } from "../types";
 
 const API_BASE = "/api";
 
+/**
+ * Returns a display-safe image URL.
+ * External URLs (http...) are routed through our server proxy to avoid CORS.
+ * Local /uploads paths are returned as-is.
+ */
+export function getImageSrc(imageUrl: string | null | undefined): string | null {
+  if (!imageUrl) return null;
+  if (imageUrl.startsWith("http")) {
+    return `${API_BASE}/image-proxy?url=${encodeURIComponent(imageUrl)}`;
+  }
+  return imageUrl;
+}
+
 async function request<T>(
   url: string,
   options?: RequestInit

@@ -49,6 +49,27 @@ app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 // Serve static uploads
 app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 
+// Image proxy - serves external images through our server to avoid CORS issues
+app.get("/api/image-proxy", async (req, res) => {
+  const url = req.query.url as string;
+  if (!url || !url.startsWith("http")) {
+    return res.status(400).json({ error: "Valid URL required" });
+  }
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      return res.status(response.status).json({ error: "Upstream fetch failed" });
+    }
+    const contentType = response.headers.get("content-type") || "image/png";
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    const buffer = Buffer.from(await response.arrayBuffer());
+    res.send(buffer);
+  } catch {
+    res.status(502).json({ error: "Failed to fetch image" });
+  }
+});
+
 // API routes
 app.use("/api/decks", decksRouter);
 app.use("/api/cards", cardsRouter);

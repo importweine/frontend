@@ -8,7 +8,7 @@ import {
   Brain,
   Keyboard,
 } from "lucide-react";
-import { getDeck, getCards, reviewCard } from "../api";
+import { getDeck, getCards, reviewCard, getImageSrc } from "../api";
 import type { Deck, Card } from "../types";
 
 export default function StudyMode() {
@@ -65,9 +65,10 @@ export default function StudyMode() {
     const PRELOAD_AHEAD = 3;
     for (let i = currentIndex; i < Math.min(currentIndex + PRELOAD_AHEAD, dueCards.length); i++) {
       const card = dueCards[i];
-      if (card?.imageUrl && !preloadedImages.current.has(card.id)) {
+      const imgSrc = getImageSrc(card?.imageUrl);
+      if (imgSrc && !preloadedImages.current.has(card.id)) {
         const img = new Image();
-        img.src = card.imageUrl;
+        img.src = imgSrc;
         preloadedImages.current.add(card.id);
       }
     }
@@ -93,7 +94,7 @@ export default function StudyMode() {
               if (fresh && fresh.imageUrl && !oldCard.imageUrl) {
                 // Preload newly available image
                 const img = new Image();
-                img.src = fresh.imageUrl;
+                img.src = getImageSrc(fresh.imageUrl) || fresh.imageUrl;
                 preloadedImages.current.add(fresh.id);
                 return { ...oldCard, imageUrl: fresh.imageUrl, imageStatus: fresh.imageStatus };
               }
@@ -353,7 +354,7 @@ export default function StudyMode() {
               </p>
               {currentCard.imageUrl ? (
                 <img
-                  src={currentCard.imageUrl}
+                  src={getImageSrc(currentCard.imageUrl) || currentCard.imageUrl}
                   alt="Kartenabbildung"
                   className="mt-6 max-h-48 rounded-xl object-contain"
                 />
