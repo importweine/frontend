@@ -16,6 +16,7 @@ export interface Card {
   front: string;
   back: string;
   imageUrl: string | null;
+  imageStatus: "NONE" | "PENDING" | "GENERATING" | "COMPLETED" | "FAILED";
   source: string;
   sourcePages: string | null;
   nextReview: string;

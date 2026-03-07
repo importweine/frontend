@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import prisma from "../lib/prisma";
+import { generateImagesForCards } from "../services/imageGen";
 
 const router = Router();
 
@@ -182,6 +183,61 @@ router.post("/:id/review", async (req: Request, res: Response) => {
   } catch (error) {
     console.error("Error reviewing card:", error);
     res.status(500).json({ error: "Failed to submit review" });
+  }
+});
+
+// POST /:id/generate-image - trigger image generation for a single card
+router.post("/:id/generate-image", async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const card = await prisma.card.findUnique({ where: { id } });
+    if (!card) {
+      return res.status(404).json({ error: "Card not found" });
+    }
+
+    // Don't regenerate if already completed
+    if (card.imageStatus === "GENERATING" || card.imageStatus === "PENDING") {
+      return res.json({ message: "Image generation already in progress", imageStatus: card.imageStatus });
+    }
+
+    generateImagesForCards([id]).catch((err) =>
+      console.error("Image generation error:", err)
+    );
+
+    res.json({ message: "Image generation started", imageStatus: "PENDING" });
+  } catch (error) {
+    console.error("Error triggering image generation:", error);
+    res.status(500).json({ error: "Failed to trigger image generation" });
+  }
+});
+
+// POST /generate-images/deck/:deckId - generate images for all cards in a deck that don't have one
+router.post("/generate-images/deck/:deckId", async (req: Request, res: Response) => {
+  try {
+    const { deckId } = req.params;
+
+    const cards = await prisma.card.findMany({
+      where: {
+        deckId,
+        imageStatus: { in: ["NONE", "FAILED"] },
+      },
+      select: { id: true },
+    });
+
+    if (cards.length === 0) {
+      return res.json({ message: "No cards need image generation", count: 0 });
+    }
+
+    const cardIds = cards.map((c) => c.id);
+    generateImagesForCards(cardIds).catch((err) =>
+      console.error("Bulk image generation error:", err)
+    );
+
+    res.json({ message: `Image generation started for ${cardIds.length} cards`, count: cardIds.length });
+  } catch (error) {
+    console.error("Error triggering bulk image generation:", error);
+    res.status(500).json({ error: "Failed to trigger image generation" });
   }
 });
 

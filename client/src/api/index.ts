@@ -110,6 +110,19 @@ export async function reviewCard(
   });
 }
 
+// Image generation
+export async function generateCardImage(cardId: string): Promise<{ message: string }> {
+  return request<{ message: string }>(`/cards/${cardId}/generate-image`, {
+    method: "POST",
+  });
+}
+
+export async function generateDeckImages(deckId: string): Promise<{ message: string; count: number }> {
+  return request<{ message: string; count: number }>(`/cards/generate-images/deck/${deckId}`, {
+    method: "POST",
+  });
+}
+
 // Uploads
 export async function getUploads(deckId: string): Promise<Upload[]> {
   return request<Upload[]>(`/uploads?deckId=${deckId}`);

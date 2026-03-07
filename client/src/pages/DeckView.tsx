@@ -27,6 +27,7 @@ import {
   uploadFile,
   deleteDeck,
   updateDeck,
+  generateDeckImages,
 } from "../api";
 import type { Deck, Card, Upload as UploadType, DeckStats } from "../types";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -334,6 +335,20 @@ export default function DeckView() {
                   <Edit3 size={14} /> Umbenennen
                 </button>
                 <button
+                  onClick={async () => {
+                    setMenuOpen(false);
+                    try {
+                      const result = await generateDeckImages(deckId!);
+                      alert(result.message);
+                    } catch (err) {
+                      alert(err instanceof Error ? err.message : "Fehler bei Bildgenerierung");
+                    }
+                  }}
+                  className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                >
+                  <Image size={14} /> Bilder generieren
+                </button>
+                <button
                   onClick={() => {
                     setMenuOpen(false);
                     setDeleteConfirm({ type: "deck" });
@@ -490,6 +505,14 @@ export default function DeckView() {
                         >
                           {card.source === "AI_GENERATED" ? "KI" : "Manuell"}
                         </span>
+                        {/* Image status */}
+                        {card.imageUrl ? (
+                          <span className="text-xs px-1.5 py-0.5 rounded-full bg-teal-50 text-teal-600">
+                            <Image size={12} />
+                          </span>
+                        ) : card.imageStatus === "PENDING" || card.imageStatus === "GENERATING" ? (
+                          <Loader2 size={14} className="text-gray-400 animate-spin" />
+                        ) : null}
                         {/* Review status */}
                         {isMastered ? (
                           <Sparkles size={16} className="text-green-500" />

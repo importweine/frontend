@@ -286,13 +286,20 @@ export default function StudyMode() {
               <p className="text-lg md:text-xl text-gray-800 text-center leading-relaxed whitespace-pre-wrap">
                 {currentCard.back}
               </p>
-              {currentCard.imageUrl && (
+              {currentCard.imageUrl ? (
                 <img
                   src={currentCard.imageUrl}
                   alt="Kartenabbildung"
                   className="mt-6 max-h-48 rounded-xl object-contain"
                 />
-              )}
+              ) : (currentCard.imageStatus === "PENDING" || currentCard.imageStatus === "GENERATING") ? (
+                <div className="mt-6 w-48 h-32 bg-gray-50 rounded-xl flex items-center justify-center border border-gray-100">
+                  <div className="text-center">
+                    <div className="w-6 h-6 border-2 border-brand-300 border-t-brand-600 rounded-full animate-spin mx-auto mb-2" />
+                    <span className="text-xs text-gray-400">Bild wird generiert...</span>
+                  </div>
+                </div>
+              ) : null}
               {currentCard.sourcePages && (
                 <p className="mt-4 text-xs text-gray-400">
                   Quelle: Seite {currentCard.sourcePages}

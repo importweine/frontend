@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import prisma from "../lib/prisma";
 import { PageChunk } from "./pdf";
+import { generateImagesForCards } from "./imageGen";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -144,15 +145,20 @@ export async function generateCardsFromChunks(
       throw new Error("No valid cards generated from any chunk");
     }
 
-    await prisma.card.createMany({
-      data: cards.map((card) => ({
-        deckId,
-        front: card.front,
-        back: card.back,
-        source: "AI_GENERATED" as const,
-        sourcePages: card.pages ? card.pages.join(",") : null,
-      })),
-    });
+    // Use create individually to get IDs for image generation
+    const createdCards = await Promise.all(
+      cards.map((card) =>
+        prisma.card.create({
+          data: {
+            deckId,
+            front: card.front,
+            back: card.back,
+            source: "AI_GENERATED" as const,
+            sourcePages: card.pages ? card.pages.join(",") : null,
+          },
+        })
+      )
+    );
 
     console.log(`Generated ${cards.length} cards from ${chunks.length} chunks`);
 
@@ -163,6 +169,12 @@ export async function generateCardsFromChunks(
         cardCount: cards.length,
       },
     });
+
+    // Fire and forget: generate images in background AFTER cards are available
+    const cardIds = createdCards.map((c) => c.id);
+    generateImagesForCards(cardIds).catch((err) =>
+      console.error("Background image generation error:", err)
+    );
   } catch (error) {
     console.error("Error generating cards from chunks:", error);
     await prisma.upload.update({
@@ -246,14 +258,18 @@ export async function generateCardsFromImage(
       throw new Error("No valid cards generated from image");
     }
 
-    await prisma.card.createMany({
-      data: cards.map((card) => ({
-        deckId,
-        front: card.front,
-        back: card.back,
-        source: "AI_GENERATED" as const,
-      })),
-    });
+    const createdCards = await Promise.all(
+      cards.map((card) =>
+        prisma.card.create({
+          data: {
+            deckId,
+            front: card.front,
+            back: card.back,
+            source: "AI_GENERATED" as const,
+          },
+        })
+      )
+    );
 
     await prisma.upload.update({
       where: { id: uploadId },
@@ -262,6 +278,12 @@ export async function generateCardsFromImage(
         cardCount: cards.length,
       },
     });
+
+    // Fire and forget: generate images in background
+    const cardIds = createdCards.map((c) => c.id);
+    generateImagesForCards(cardIds).catch((err) =>
+      console.error("Background image generation error:", err)
+    );
   } catch (error) {
     console.error("Error generating cards from image:", error);
     await prisma.upload.update({
