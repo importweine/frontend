@@ -160,11 +160,14 @@ async function generateSingleImage(prompt: string): Promise<string | null> {
     },
   };
 
+  const serializedBody = JSON.stringify(body);
+  console.log(`Hedra request body (${serializedBody.length} bytes):`, serializedBody.substring(0, 500));
+
   try {
     const response = await fetch(`${HEDRA_API_BASE}/generations`, {
       method: "POST",
       headers: getHeaders(),
-      body: JSON.stringify(body),
+      body: serializedBody,
     });
 
     if (!response.ok) {
