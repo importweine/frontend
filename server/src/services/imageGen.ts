@@ -152,7 +152,7 @@ async function generateSingleImage(prompt: string): Promise<string | null> {
   const body = {
     type: "image",
     ai_model_id: modelId,
-    generated_image_inputs: {
+    image: {
       text_prompt: fullPrompt,
       ai_model_id: modelId,
       aspect_ratio: "16:9",
