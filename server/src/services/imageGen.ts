@@ -145,44 +145,69 @@ async function generateSingleImage(prompt: string): Promise<string | null> {
   }
 
   const fullPrompt = CAT_BASE_PROMPT + prompt;
+  const seed = Math.floor(Math.random() * 1000000);
 
-  try {
-    const response = await fetch(`${HEDRA_API_BASE}/generations`, {
-      method: "POST",
-      headers: getHeaders(),
-      body: JSON.stringify({
+  // Try multiple body formats - the API docs are inconsistent
+  const bodyVariants = [
+    {
+      name: "generated_image_inputs",
+      body: {
+        type: "image",
+        ai_model_id: modelId,
+        generated_image_inputs: {
+          text_prompt: fullPrompt,
+          aspect_ratio: "16:9",
+          seed,
+        },
+      },
+    },
+    {
+      name: "image",
+      body: {
         type: "image",
         ai_model_id: modelId,
         image: {
           text_prompt: fullPrompt,
           aspect_ratio: "16:9",
-          seed: Math.floor(Math.random() * 1000000),
+          seed,
         },
-      }),
-    });
+      },
+    },
+  ];
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`Hedra generation request failed (${response.status}):`, errorText);
-      return null;
+  for (const variant of bodyVariants) {
+    try {
+      console.log(`Trying Hedra generation with body key: ${variant.name}`);
+
+      const response = await fetch(`${HEDRA_API_BASE}/generations`, {
+        method: "POST",
+        headers: getHeaders(),
+        body: JSON.stringify(variant.body),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`Hedra generation failed with "${variant.name}" (${response.status}):`, errorText);
+        continue; // Try next variant
+      }
+
+      const data = (await response.json()) as HedraGeneration;
+      const generationId = data.id;
+
+      if (!generationId) {
+        console.error("No generation ID in Hedra response:", JSON.stringify(data));
+        return null;
+      }
+
+      console.log(`Hedra generation started (${variant.name}): ${generationId}`);
+      return await pollGeneration(generationId);
+    } catch (error) {
+      console.error(`Hedra generation error with "${variant.name}":`, error);
     }
-
-    const data = (await response.json()) as HedraGeneration;
-    const generationId = data.id;
-
-    if (!generationId) {
-      console.error("No generation ID in Hedra response:", JSON.stringify(data));
-      return null;
-    }
-
-    console.log(`Hedra generation started: ${generationId}`);
-
-    // Poll for completion
-    return await pollGeneration(generationId);
-  } catch (error) {
-    console.error("Hedra image generation failed:", error);
-    return null;
   }
+
+  console.error("All Hedra body variants failed");
+  return null;
 }
 
 function buildImagePrompt(front: string, back: string): string {
