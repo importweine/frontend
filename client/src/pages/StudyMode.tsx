@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
   X,
@@ -30,6 +30,8 @@ export default function StudyMode() {
     easy: 0,
   });
   const [showKeyboardHint, setShowKeyboardHint] = useState(true);
+  const preloadedImages = useRef<Set<string>>(new Set());
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -57,6 +59,69 @@ export default function StudyMode() {
     const timer = setTimeout(() => setShowKeyboardHint(false), 5000);
     return () => clearTimeout(timer);
   }, []);
+
+  // Preload images for upcoming cards (next 3)
+  useEffect(() => {
+    const PRELOAD_AHEAD = 3;
+    for (let i = currentIndex; i < Math.min(currentIndex + PRELOAD_AHEAD, dueCards.length); i++) {
+      const card = dueCards[i];
+      if (card?.imageUrl && !preloadedImages.current.has(card.id)) {
+        const img = new Image();
+        img.src = card.imageUrl;
+        preloadedImages.current.add(card.id);
+      }
+    }
+  }, [currentIndex, dueCards]);
+
+  // Poll for images that are still generating (refresh card data)
+  useEffect(() => {
+    const hasGenerating = dueCards.some(
+      (c, i) =>
+        i >= currentIndex &&
+        !c.imageUrl &&
+        (c.imageStatus === "PENDING" || c.imageStatus === "GENERATING")
+    );
+
+    if (hasGenerating && !pollingRef.current) {
+      pollingRef.current = setInterval(async () => {
+        try {
+          const freshCards = await getCards({ deckId, due: true });
+          setDueCards((prev) => {
+            // Merge: keep review progress but update imageUrl/imageStatus
+            return prev.map((oldCard) => {
+              const fresh = freshCards.find((c) => c.id === oldCard.id);
+              if (fresh && fresh.imageUrl && !oldCard.imageUrl) {
+                // Preload newly available image
+                const img = new Image();
+                img.src = fresh.imageUrl;
+                preloadedImages.current.add(fresh.id);
+                return { ...oldCard, imageUrl: fresh.imageUrl, imageStatus: fresh.imageStatus };
+              }
+              if (fresh && fresh.imageStatus !== oldCard.imageStatus) {
+                return { ...oldCard, imageStatus: fresh.imageStatus };
+              }
+              return oldCard;
+            });
+          });
+        } catch {
+          // ignore polling errors
+        }
+      }, 5000);
+    }
+
+    // Stop polling when no more generating cards ahead
+    if (!hasGenerating && pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+    };
+  }, [dueCards, currentIndex, deckId]);
 
   const currentCard = dueCards[currentIndex] ?? null;
 

@@ -149,6 +149,11 @@ async function generateImageForCard(cardId: string): Promise<void> {
   }
 }
 
+// Yield to event loop between batches so other requests aren't blocked
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 export async function generateImagesForCards(cardIds: string[]): Promise<void> {
   if (!process.env.HEDRA_API) {
     console.warn("HEDRA_API not set - skipping image generation");
@@ -163,12 +168,14 @@ export async function generateImagesForCards(cardIds: string[]): Promise<void> {
     data: { imageStatus: "PENDING" },
   });
 
-  // Process in batches with concurrency limit
+  // Process in batches with concurrency limit, yielding between batches
   for (let i = 0; i < cardIds.length; i += MAX_IMAGE_CONCURRENCY) {
     const batch = cardIds.slice(i, i + MAX_IMAGE_CONCURRENCY);
     await Promise.allSettled(
       batch.map((cardId) => generateImageForCard(cardId))
     );
+    // Yield to event loop so Express can handle other requests between batches
+    await yieldToEventLoop();
   }
 
   console.log(`Image generation completed for ${cardIds.length} cards`);
