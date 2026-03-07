@@ -135,7 +135,7 @@ async function generateSingleImage(prompt: string): Promise<string | null> {
       body: JSON.stringify({
         type: "image",
         ai_model_id: modelId,
-        generated_image_inputs: {
+        image: {
           text_prompt: fullPrompt,
           aspect_ratio: "16:9",
           seed: Math.floor(Math.random() * 1000000),
