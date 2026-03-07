@@ -28,6 +28,7 @@ import {
   deleteDeck,
   updateDeck,
   generateDeckImages,
+  generateCardImage,
 } from "../api";
 import type { Deck, Card, Upload as UploadType, DeckStats } from "../types";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -512,7 +513,47 @@ export default function DeckView() {
                           </span>
                         ) : card.imageStatus === "PENDING" || card.imageStatus === "GENERATING" ? (
                           <Loader2 size={14} className="text-gray-400 animate-spin" />
-                        ) : null}
+                        ) : card.imageStatus === "FAILED" ? (
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              try {
+                                await generateCardImage(card.id);
+                                setCards((prev) =>
+                                  prev.map((c) =>
+                                    c.id === card.id ? { ...c, imageStatus: "PENDING" } : c
+                                  )
+                                );
+                              } catch {
+                                alert("Bildgenerierung fehlgeschlagen");
+                              }
+                            }}
+                            className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-red-50 text-red-500 hover:bg-red-100 transition-default"
+                            title="Bild erneut generieren"
+                          >
+                            <AlertCircle size={12} /> Fehler
+                          </button>
+                        ) : (
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              try {
+                                await generateCardImage(card.id);
+                                setCards((prev) =>
+                                  prev.map((c) =>
+                                    c.id === card.id ? { ...c, imageStatus: "PENDING" } : c
+                                  )
+                                );
+                              } catch {
+                                alert("Bildgenerierung fehlgeschlagen");
+                              }
+                            }}
+                            className="p-1.5 text-gray-300 hover:text-teal-500 rounded-lg hover:bg-teal-50 opacity-0 group-hover:opacity-100 transition-default"
+                            title="Bild generieren"
+                          >
+                            <Image size={14} />
+                          </button>
+                        )}
                         {/* Review status */}
                         {isMastered ? (
                           <Sparkles size={16} className="text-green-500" />
