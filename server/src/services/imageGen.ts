@@ -1,6 +1,7 @@
 import prisma from "../lib/prisma";
 
 const HEDRA_API_BASE = "https://api.hedra.com/web-app/public";
+const HEDRA_LEGACY_BASE = "https://api.hedra.com";
 const IMAGE_MODEL_NAME = "Grok Imagine T2I"; // Text-to-Image, 3 credits/generation
 const MAX_IMAGE_CONCURRENCY = 5;
 const POLL_INTERVAL_MS = 3000;
@@ -25,11 +26,14 @@ interface HedraGeneration {
   error?: string;
 }
 
+function getApiKey(): string {
+  return process.env.HEDRA_API || "";
+}
+
 function getHeaders(): Record<string, string> {
-  const apiKey = process.env.HEDRA_API;
   return {
     "Content-Type": "application/json",
-    "X-API-Key": apiKey || "",
+    "X-API-Key": getApiKey(),
   };
 }
 
@@ -71,12 +75,12 @@ async function resolveModelId(): Promise<string | null> {
       return t2iModels[0].id;
     }
 
-    // Fallback: any Grok Imagine model that is NOT I2I or video
+    // Fallback: any image model (not I2I or video)
     const imageModels = models.filter((m) => {
       const name = m.name?.toLowerCase() || "";
       const type = m.type?.toLowerCase() || "";
       if (name.includes("video") || type.includes("video") || name.includes("i2v") || name.includes("t2v") || name.includes("i2i")) return false;
-      return name.includes("grok") && name.includes("imagine");
+      return type === "image" || name.includes("t2i");
     });
 
     if (imageModels.length > 0) {
@@ -85,7 +89,7 @@ async function resolveModelId(): Promise<string | null> {
       return imageModels[0].id;
     }
 
-    console.error(`Hedra model "${IMAGE_MODEL_NAME}" not found. Available:`, models.map((m) => `${m.name} (${m.type || "unknown"})`).join(", "));
+    console.error(`Hedra model "${IMAGE_MODEL_NAME}" not found.`);
     return null;
   } catch (error) {
     console.error("Failed to resolve Hedra model ID:", error);
@@ -133,6 +137,208 @@ async function pollGeneration(generationId: string): Promise<string | null> {
   return null;
 }
 
+// Strategy 1: /web-app/public/generations with generated_image_inputs
+async function tryGenerationsEndpoint(fullPrompt: string, modelId: string, seed: number): Promise<string | null> {
+  const body = {
+    type: "image",
+    ai_model_id: modelId,
+    generated_image_inputs: {
+      text_prompt: fullPrompt,
+      aspect_ratio: "16:9",
+      seed,
+    },
+  };
+
+  console.log(`[Strategy 1] POST /generations with generated_image_inputs`);
+  const response = await fetch(`${HEDRA_API_BASE}/generations`, {
+    method: "POST",
+    headers: getHeaders(),
+    body: JSON.stringify(body),
+    redirect: "manual",
+  });
+
+  // Handle redirects manually to preserve POST body
+  if (response.status >= 300 && response.status < 400) {
+    const location = response.headers.get("location");
+    console.log(`[Strategy 1] Redirect ${response.status} → ${location}`);
+    if (location) {
+      const redirectResponse = await fetch(location, {
+        method: "POST",
+        headers: getHeaders(),
+        body: JSON.stringify(body),
+      });
+      if (redirectResponse.ok) {
+        const data = (await redirectResponse.json()) as HedraGeneration;
+        if (data.id) return await pollGeneration(data.id);
+      }
+      console.error(`[Strategy 1] Redirect response: ${redirectResponse.status}`, await redirectResponse.text());
+    }
+    return null;
+  }
+
+  if (!response.ok) {
+    console.error(`[Strategy 1] Failed (${response.status}):`, await response.text());
+    return null;
+  }
+
+  const data = (await response.json()) as HedraGeneration;
+  if (data.id) {
+    console.log(`[Strategy 1] Generation started: ${data.id}`);
+    return await pollGeneration(data.id);
+  }
+  console.error(`[Strategy 1] No generation ID:`, JSON.stringify(data));
+  return null;
+}
+
+// Strategy 2: /web-app/public/generations with image field (matching error message)
+async function tryGenerationsWithImageField(fullPrompt: string, modelId: string, seed: number): Promise<string | null> {
+  const body = {
+    type: "image",
+    ai_model_id: modelId,
+    image: {
+      text_prompt: fullPrompt,
+      aspect_ratio: "16:9",
+      seed,
+    },
+  };
+
+  console.log(`[Strategy 2] POST /generations with image field`);
+  const response = await fetch(`${HEDRA_API_BASE}/generations`, {
+    method: "POST",
+    headers: getHeaders(),
+    body: JSON.stringify(body),
+    redirect: "manual",
+  });
+
+  if (response.status >= 300 && response.status < 400) {
+    const location = response.headers.get("location");
+    console.log(`[Strategy 2] Redirect ${response.status} → ${location}`);
+    if (location) {
+      const redirectResponse = await fetch(location, {
+        method: "POST",
+        headers: getHeaders(),
+        body: JSON.stringify(body),
+      });
+      if (redirectResponse.ok) {
+        const data = (await redirectResponse.json()) as HedraGeneration;
+        if (data.id) return await pollGeneration(data.id);
+      }
+    }
+    return null;
+  }
+
+  if (!response.ok) {
+    console.error(`[Strategy 2] Failed (${response.status}):`, await response.text());
+    return null;
+  }
+
+  const data = (await response.json()) as HedraGeneration;
+  if (data.id) {
+    console.log(`[Strategy 2] Generation started: ${data.id}`);
+    return await pollGeneration(data.id);
+  }
+  console.error(`[Strategy 2] No generation ID:`, JSON.stringify(data));
+  return null;
+}
+
+// Strategy 3: Legacy /v1/images/text-to-image endpoint
+async function tryLegacyEndpoint(fullPrompt: string, seed: number): Promise<string | null> {
+  // Legacy API may use Bearer auth or X-API-Key
+  const apiKey = getApiKey();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "X-API-Key": apiKey,
+    "Authorization": `Bearer ${apiKey}`,
+  };
+
+  // Try with common legacy body formats
+  const body = {
+    prompt: fullPrompt,
+    model: "grok_imagine",
+    width: 1024,
+    height: 576,
+    aspect_ratio: "16:9",
+    seed,
+  };
+
+  console.log(`[Strategy 3] POST /v1/images/text-to-image (legacy)`);
+  const response = await fetch(`${HEDRA_LEGACY_BASE}/v1/images/text-to-image`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error(`[Strategy 3] Failed (${response.status}):`, errorText);
+
+    // If 404, try /v1/portrait as documented fallback
+    if (response.status === 404) {
+      return await tryPortraitEndpoint(fullPrompt, seed);
+    }
+    return null;
+  }
+
+  const data = await response.json() as Record<string, unknown>;
+  console.log(`[Strategy 3] Response:`, JSON.stringify(data).substring(0, 500));
+
+  // Legacy response: { images: [{ url, content_type }] }
+  const images = data.images as Array<{ url: string }> | undefined;
+  if (images && images.length > 0 && images[0].url) {
+    return images[0].url;
+  }
+
+  // Maybe it returns a generation ID for polling
+  const id = data.id as string | undefined;
+  if (id) {
+    return await pollGeneration(id);
+  }
+
+  return null;
+}
+
+// Strategy 4: /v1/portrait endpoint (fallback from MEDICARD docs)
+async function tryPortraitEndpoint(fullPrompt: string, seed: number): Promise<string | null> {
+  const apiKey = getApiKey();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "X-API-Key": apiKey,
+    "Authorization": `Bearer ${apiKey}`,
+  };
+
+  const body = {
+    prompt: fullPrompt,
+    seed,
+  };
+
+  console.log(`[Strategy 4] POST /v1/portrait (fallback)`);
+  const response = await fetch(`${HEDRA_LEGACY_BASE}/v1/portrait`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    console.error(`[Strategy 4] Failed (${response.status}):`, await response.text());
+    return null;
+  }
+
+  const data = await response.json() as Record<string, unknown>;
+  console.log(`[Strategy 4] Response:`, JSON.stringify(data).substring(0, 500));
+
+  const images = data.images as Array<{ url: string }> | undefined;
+  if (images && images.length > 0 && images[0].url) {
+    return images[0].url;
+  }
+
+  const id = data.id as string | undefined;
+  if (id) {
+    return await pollGeneration(id);
+  }
+
+  return null;
+}
+
 async function generateSingleImage(prompt: string): Promise<string | null> {
   const apiKey = process.env.HEDRA_API;
   if (!apiKey) {
@@ -149,46 +355,35 @@ async function generateSingleImage(prompt: string): Promise<string | null> {
   const fullPrompt = CAT_BASE_PROMPT + prompt;
   const seed = Math.floor(Math.random() * 1000000);
 
-  const body = {
-    type: "image",
-    ai_model_id: modelId,
-    generated_image_inputs: {
-      text_prompt: fullPrompt,
-      aspect_ratio: "16:9",
-      seed,
-    },
-  };
+  // Try strategies in order until one succeeds
+  console.log(`Attempting image generation (prompt: ${prompt.substring(0, 80)}...)`);
 
-  const serializedBody = JSON.stringify(body);
-  console.log(`Hedra request body (${serializedBody.length} bytes):`, serializedBody.substring(0, 500));
-
+  // Strategy 1: generated_image_inputs (MCP server pattern)
   try {
-    const response = await fetch(`${HEDRA_API_BASE}/generations`, {
-      method: "POST",
-      headers: getHeaders(),
-      body: serializedBody,
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`Hedra generation failed (${response.status}):`, errorText);
-      return null;
-    }
-
-    const data = (await response.json()) as HedraGeneration;
-    const generationId = data.id;
-
-    if (!generationId) {
-      console.error("No generation ID in Hedra response:", JSON.stringify(data));
-      return null;
-    }
-
-    console.log(`Hedra generation started: ${generationId}`);
-    return await pollGeneration(generationId);
+    const url = await tryGenerationsEndpoint(fullPrompt, modelId, seed);
+    if (url) return url;
   } catch (error) {
-    console.error("Hedra generation error:", error);
-    return null;
+    console.error(`[Strategy 1] Error:`, error);
   }
+
+  // Strategy 2: image field (matches error message pattern)
+  try {
+    const url = await tryGenerationsWithImageField(fullPrompt, modelId, seed);
+    if (url) return url;
+  } catch (error) {
+    console.error(`[Strategy 2] Error:`, error);
+  }
+
+  // Strategy 3: Legacy endpoint
+  try {
+    const url = await tryLegacyEndpoint(fullPrompt, seed);
+    if (url) return url;
+  } catch (error) {
+    console.error(`[Strategy 3] Error:`, error);
+  }
+
+  console.error("All image generation strategies failed");
+  return null;
 }
 
 function buildImagePrompt(front: string, back: string): string {
