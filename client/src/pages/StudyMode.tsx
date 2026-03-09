@@ -8,7 +8,7 @@ import {
   Brain,
   Keyboard,
 } from "lucide-react";
-import { getDeck, getCards, reviewCard, getImageSrc } from "../api";
+import { getDeck, getCards, reviewCard, getImageSrc, getImageFallbackSrc } from "../api";
 import type { Deck, Card } from "../types";
 
 export default function StudyMode() {
@@ -357,7 +357,15 @@ export default function StudyMode() {
                   src={getImageSrc(currentCard.imageUrl) || currentCard.imageUrl}
                   alt="Kartenabbildung"
                   className="mt-6 max-h-48 rounded-xl object-contain"
-                  onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                  onError={(e) => {
+                    const img = e.target as HTMLImageElement;
+                    const fallback = getImageFallbackSrc(currentCard.id);
+                    if (!img.src.includes("/api/cards/")) {
+                      img.src = fallback;
+                    } else {
+                      img.style.display = 'none';
+                    }
+                  }}
                 />
               ) : (currentCard.imageStatus === "PENDING" || currentCard.imageStatus === "GENERATING") ? (
                 <div className="mt-6 w-48 h-32 bg-gray-50 rounded-xl flex items-center justify-center border border-gray-100">

@@ -329,10 +329,11 @@ async function generateSingleImage(prompt: string): Promise<string | null> {
 }
 
 /**
- * Download an external image and save it locally to /uploads.
+ * Download an external image, save locally to /uploads AND store bytes in DB.
+ * The DB copy acts as a backup that survives Docker rebuilds (no Volume needed).
  * Returns the local path (e.g. "/uploads/gen-abc123.png") or null on failure.
  */
-async function downloadImageLocally(externalUrl: string): Promise<string | null> {
+async function downloadImageLocally(externalUrl: string, cardId?: string): Promise<string | null> {
   try {
     console.log(`[ImageGen] Downloading image from: ${externalUrl.substring(0, 120)}`);
     const response = await fetch(externalUrl);
@@ -359,11 +360,45 @@ async function downloadImageLocally(externalUrl: string): Promise<string | null>
 
     const localUrl = `/uploads/${filename}`;
     console.log(`[ImageGen] Saved locally → ${localUrl} (${Math.round(buffer.length / 1024)}KB)`);
+
+    // Store image bytes in DB as backup (survives Docker rebuilds without Volume)
+    if (cardId) {
+      try {
+        await prisma.card.update({
+          where: { id: cardId },
+          data: { imageData: buffer, imageMimeType: contentType },
+        });
+        console.log(`[ImageGen] Backed up to DB for card ${cardId}`);
+      } catch (err) {
+        console.warn(`[ImageGen] DB backup failed for card ${cardId}:`, err);
+      }
+    }
+
     return localUrl;
   } catch (error) {
     console.error(`[ImageGen] Failed to download image:`, error);
     return null;
   }
+}
+
+/**
+ * Save raw image bytes to a local file AND store in DB.
+ * Used to restore images from DB on startup.
+ */
+async function saveImageFromBuffer(buffer: Buffer, mimeType: string): Promise<string> {
+  const ext = mimeType.includes("jpeg") || mimeType.includes("jpg") ? ".jpg"
+    : mimeType.includes("webp") ? ".webp"
+    : ".png";
+
+  const filename = `gen-${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
+  const filePath = path.join(UPLOADS_DIR, filename);
+
+  if (!fs.existsSync(UPLOADS_DIR)) {
+    fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+  }
+
+  fs.writeFileSync(filePath, buffer);
+  return `/uploads/${filename}`;
 }
 
 function buildImagePrompt(front: string, back: string): string {
@@ -386,7 +421,8 @@ async function generateImageForCard(cardId: string): Promise<void> {
 
     if (externalUrl) {
       // Download externally-hosted image to local /uploads to avoid mobile CORS/blocking issues
-      const localUrl = await downloadImageLocally(externalUrl);
+      // Also stores bytes in DB as backup (survives Docker rebuilds)
+      const localUrl = await downloadImageLocally(externalUrl, cardId);
       const finalUrl = localUrl || externalUrl; // Fallback to external if download fails
 
       await prisma.card.update({
@@ -534,9 +570,10 @@ async function recoverImageFromHedra(
 
 /**
  * Startup migration:
- * 1. Finds cards with missing images (external URLs or deleted local files)
- * 2. Tries to recover from Hedra dashboard (no credits used)
- * 3. Only regenerates as last resort
+ * 1. Finds cards with missing local image files (Docker rebuild)
+ * 2. Restores from DB imageData (free, instant — no API needed!)
+ * 3. Falls back to Hedra recovery if DB has no backup
+ * 4. Only regenerates as absolute last resort
  */
 export async function migrateExternalImages(): Promise<void> {
   const allCards = await prisma.card.findMany({
@@ -544,7 +581,7 @@ export async function migrateExternalImages(): Promise<void> {
       imageUrl: { not: null },
       imageStatus: "COMPLETED",
     },
-    select: { id: true, imageUrl: true },
+    select: { id: true, imageUrl: true, imageData: true, imageMimeType: true },
   });
 
   // Find cards with external URLs (expired CDN links)
@@ -563,33 +600,89 @@ export async function migrateExternalImages(): Promise<void> {
 
   if (brokenCards.length === 0) {
     console.log("[Migration] All images OK — nothing to migrate");
+
+    // Backfill: store existing local files in DB for cards that don't have imageData yet
+    const needBackfill = allCards.filter(
+      (c) => c.imageUrl?.startsWith("/uploads/") && !c.imageData
+    );
+    if (needBackfill.length > 0) {
+      console.log(`[Migration] Backfilling ${needBackfill.length} cards with DB image backup...`);
+      for (const card of needBackfill) {
+        try {
+          const filePath = path.join(UPLOADS_DIR, path.basename(card.imageUrl!));
+          if (fs.existsSync(filePath)) {
+            const buffer = fs.readFileSync(filePath);
+            const ext = path.extname(filePath).toLowerCase();
+            const mimeType = ext === ".jpg" || ext === ".jpeg" ? "image/jpeg"
+              : ext === ".webp" ? "image/webp" : "image/png";
+            await prisma.card.update({
+              where: { id: card.id },
+              data: { imageData: buffer, imageMimeType: mimeType },
+            });
+          }
+        } catch (err) {
+          console.warn(`[Migration] Backfill failed for card ${card.id}:`, err);
+        }
+      }
+      console.log(`[Migration] Backfill complete`);
+    }
     return;
   }
 
   console.log(`[Migration] Found ${brokenCards.length} broken images (${externalCards.length} external, ${missingLocalCards.length} missing local files)`);
 
-  // Step 1: Try to recover from Hedra dashboard (free, no credits)
-  const hedraUrls = await fetchHedraGenerations();
-
+  let restoredFromDb = 0;
   let recovered = 0;
   let downloadedDirect = 0;
   const needRegeneration: string[] = [];
 
   for (const card of brokenCards) {
-    // Try Hedra recovery first (for external URLs)
-    if (card.imageUrl && card.imageUrl.startsWith("http")) {
-      const localUrl = await recoverImageFromHedra(card.imageUrl, hedraUrls);
-      if (localUrl) {
+    // Priority 1: Restore from DB imageData (instant, free, no API needed!)
+    if (card.imageData && card.imageData.length > 0) {
+      try {
+        const mimeType = card.imageMimeType || "image/png";
+        const localUrl = await saveImageFromBuffer(Buffer.from(card.imageData), mimeType);
         await prisma.card.update({
           where: { id: card.id },
           data: { imageUrl: localUrl },
         });
-        recovered++;
+        restoredFromDb++;
+        console.log(`[Migration] Restored from DB → ${localUrl} for card ${card.id}`);
         continue;
+      } catch (err) {
+        console.warn(`[Migration] DB restore failed for card ${card.id}:`, err);
+      }
+    }
+
+    // Priority 2: Try Hedra recovery (for external URLs, if API key available)
+    if (card.imageUrl && card.imageUrl.startsWith("http")) {
+      if (process.env.HEDRA_API) {
+        const hedraUrls = await fetchHedraGenerations();
+        const localUrl = await recoverImageFromHedra(card.imageUrl, hedraUrls);
+        if (localUrl) {
+          // Also backup to DB
+          try {
+            const filePath = path.join(UPLOADS_DIR, path.basename(localUrl));
+            const buffer = fs.readFileSync(filePath);
+            const mimeType = localUrl.endsWith(".jpg") ? "image/jpeg"
+              : localUrl.endsWith(".webp") ? "image/webp" : "image/png";
+            await prisma.card.update({
+              where: { id: card.id },
+              data: { imageUrl: localUrl, imageData: buffer, imageMimeType: mimeType },
+            });
+          } catch {
+            await prisma.card.update({
+              where: { id: card.id },
+              data: { imageUrl: localUrl },
+            });
+          }
+          recovered++;
+          continue;
+        }
       }
 
-      // Try direct download as fallback (maybe URL works from server)
-      const directUrl = await downloadImageLocally(card.imageUrl);
+      // Try direct download as fallback
+      const directUrl = await downloadImageLocally(card.imageUrl, card.id);
       if (directUrl) {
         await prisma.card.update({
           where: { id: card.id },
@@ -600,9 +693,7 @@ export async function migrateExternalImages(): Promise<void> {
       }
     }
 
-    // For missing local files: try all Hedra URLs to re-download
-    // (We can't match by URL, but we've lost the file)
-    // Mark for regeneration as last resort
+    // Last resort: mark for regeneration
     await prisma.card.update({
       where: { id: card.id },
       data: { imageUrl: null, imageStatus: "NONE" },
@@ -610,9 +701,9 @@ export async function migrateExternalImages(): Promise<void> {
     needRegeneration.push(card.id);
   }
 
-  console.log(`[Migration] Results: ${recovered} recovered from Hedra, ${downloadedDirect} downloaded direct, ${needRegeneration.length} need regeneration`);
+  console.log(`[Migration] Results: ${restoredFromDb} from DB, ${recovered} from Hedra, ${downloadedDirect} direct download, ${needRegeneration.length} need regeneration`);
 
-  // Step 2: Only regenerate what couldn't be recovered (costs credits)
+  // Only regenerate what couldn't be recovered (costs credits)
   if (needRegeneration.length > 0 && process.env.HEDRA_API) {
     console.log(`[Migration] Regenerating ${needRegeneration.length} images (last resort)...`);
     generateImagesForCards(needRegeneration).catch((err) =>

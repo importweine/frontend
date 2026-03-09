@@ -7,12 +7,20 @@ const API_BASE = "/api";
  * External URLs (http...) are routed through our server proxy to avoid CORS.
  * Local /uploads paths are returned as-is.
  */
-export function getImageSrc(imageUrl: string | null | undefined): string | null {
+export function getImageSrc(imageUrl: string | null | undefined, cardId?: string): string | null {
   if (!imageUrl) return null;
   if (imageUrl.startsWith("http")) {
     return `${API_BASE}/image-proxy?url=${encodeURIComponent(imageUrl)}`;
   }
   return imageUrl;
+}
+
+/**
+ * Fallback image URL: serves from DB if local file is missing.
+ * Use as onError fallback for <img> tags.
+ */
+export function getImageFallbackSrc(cardId: string): string {
+  return `${API_BASE}/cards/${cardId}/image`;
 }
 
 async function request<T>(

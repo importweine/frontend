@@ -7,6 +7,7 @@ import cors from "cors";
 import path from "path";
 import fs from "fs";
 
+import prisma from "./lib/prisma";
 import decksRouter from "./routes/decks";
 import cardsRouter from "./routes/cards";
 import uploadsRouter from "./routes/uploads";
@@ -67,6 +68,37 @@ app.get("/api/image-proxy", async (req, res) => {
     res.send(buffer);
   } catch {
     res.status(502).json({ error: "Failed to fetch image" });
+  }
+});
+
+// Serve image from DB (fallback when local file is missing, e.g. after Docker rebuild)
+app.get("/api/cards/:id/image", async (req, res) => {
+  try {
+    const card = await prisma.card.findUnique({
+      where: { id: req.params.id },
+      select: { imageData: true, imageMimeType: true, imageUrl: true },
+    });
+
+    if (!card) return res.status(404).json({ error: "Card not found" });
+
+    // Try local file first
+    if (card.imageUrl?.startsWith("/uploads/")) {
+      const filePath = path.join(__dirname, "..", card.imageUrl);
+      if (fs.existsSync(filePath)) {
+        return res.sendFile(filePath);
+      }
+    }
+
+    // Fallback: serve from DB
+    if (card.imageData && card.imageData.length > 0) {
+      res.setHeader("Content-Type", card.imageMimeType || "image/png");
+      res.setHeader("Cache-Control", "public, max-age=86400");
+      return res.send(Buffer.from(card.imageData));
+    }
+
+    return res.status(404).json({ error: "No image data" });
+  } catch {
+    res.status(500).json({ error: "Failed to serve image" });
   }
 });
 
