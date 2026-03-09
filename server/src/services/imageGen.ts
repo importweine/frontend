@@ -446,12 +446,100 @@ export async function generateImagesForCards(cardIds: string[]): Promise<void> {
 }
 
 /**
- * One-time migration: cards with expired external image URLs get their
- * images regenerated. Downloads are attempted first; on failure the card
- * is queued for fresh AI generation.
+ * Fetch all completed generations from Hedra dashboard and build
+ * a map of imagedelivery URLs → fresh download URLs.
+ */
+async function fetchHedraGenerations(): Promise<Map<string, string>> {
+  const urlMap = new Map<string, string>();
+  if (!process.env.HEDRA_API) return urlMap;
+
+  try {
+    console.log("[Recovery] Fetching existing generations from Hedra...");
+    const response = await fetch(`${HEDRA_API_BASE}/generations`, {
+      headers: getHeaders(),
+    });
+
+    if (!response.ok) {
+      console.error(`[Recovery] Failed to fetch generations (${response.status})`);
+      return urlMap;
+    }
+
+    const raw = (await response.json()) as Record<string, unknown> | Array<Record<string, unknown>>;
+    const obj = raw as Record<string, unknown>;
+    const generations: Array<Record<string, unknown>> = Array.isArray(raw)
+      ? raw
+      : (obj.generations || obj.data || obj.items || obj.results || []) as Array<Record<string, unknown>>;
+
+    if (!Array.isArray(generations)) return urlMap;
+
+    console.log(`[Recovery] Found ${generations.length} generations in Hedra`);
+
+    for (const gen of generations) {
+      const status = normalizeStatus(gen);
+      if (status !== "completed") continue;
+
+      const url = extractImageUrl(gen);
+      if (!url) continue;
+
+      // Map: the URL itself (for matching), and also the generation ID for status endpoint
+      urlMap.set(url, url);
+
+      // Also map any nested asset URLs for cross-reference
+      const asset = gen.asset as Record<string, unknown> | undefined;
+      if (asset) {
+        const assetUrl = asset.url as string | undefined;
+        const thumbUrl = asset.thumbnail_url as string | undefined;
+        if (assetUrl && assetUrl !== url) urlMap.set(assetUrl, url);
+        if (thumbUrl) {
+          const fullUrl = thumbUrl.replace("/thumbnail", "/public");
+          if (fullUrl !== url) urlMap.set(fullUrl, url);
+        }
+      }
+    }
+
+    console.log(`[Recovery] Mapped ${urlMap.size} URLs from Hedra generations`);
+    return urlMap;
+  } catch (error) {
+    console.error("[Recovery] Error fetching Hedra generations:", error);
+    return urlMap;
+  }
+}
+
+/**
+ * Try to recover image from Hedra by finding a matching generation.
+ * Returns local path if successful, null otherwise.
+ */
+async function recoverImageFromHedra(
+  oldUrl: string,
+  hedraUrls: Map<string, string>
+): Promise<string | null> {
+  // Direct match: the card's URL is in the Hedra generations
+  const freshUrl = hedraUrls.get(oldUrl);
+  if (freshUrl) {
+    console.log(`[Recovery] Found matching Hedra generation for ${oldUrl.substring(0, 60)}`);
+    return downloadImageLocally(freshUrl);
+  }
+
+  // Try variations (with/without query params, different subdomains)
+  const baseOldUrl = oldUrl.split("?")[0];
+  for (const [key, value] of hedraUrls) {
+    if (key.split("?")[0] === baseOldUrl) {
+      console.log(`[Recovery] Partial match found for ${oldUrl.substring(0, 60)}`);
+      return downloadImageLocally(value);
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Startup migration:
+ * 1. Finds cards with missing images (external URLs or deleted local files)
+ * 2. Tries to recover from Hedra dashboard (no credits used)
+ * 3. Only regenerates as last resort
  */
 export async function migrateExternalImages(): Promise<void> {
-  const cards = await prisma.card.findMany({
+  const allCards = await prisma.card.findMany({
     where: {
       imageUrl: { not: null },
       imageStatus: "COMPLETED",
@@ -459,42 +547,75 @@ export async function migrateExternalImages(): Promise<void> {
     select: { id: true, imageUrl: true },
   });
 
-  const externalCards = cards.filter(
+  // Find cards with external URLs (expired CDN links)
+  const externalCards = allCards.filter(
     (c) => c.imageUrl && c.imageUrl.startsWith("http")
   );
 
-  if (externalCards.length === 0) {
-    console.log("[Migration] No external image URLs to migrate");
+  // Find cards with local URLs where the file is missing (Docker rebuild)
+  const missingLocalCards = allCards.filter((c) => {
+    if (!c.imageUrl || !c.imageUrl.startsWith("/uploads/")) return false;
+    const filePath = path.join(UPLOADS_DIR, path.basename(c.imageUrl));
+    return !fs.existsSync(filePath);
+  });
+
+  const brokenCards = [...externalCards, ...missingLocalCards];
+
+  if (brokenCards.length === 0) {
+    console.log("[Migration] All images OK — nothing to migrate");
     return;
   }
 
-  console.log(`[Migration] Found ${externalCards.length} cards with external image URLs`);
+  console.log(`[Migration] Found ${brokenCards.length} broken images (${externalCards.length} external, ${missingLocalCards.length} missing local files)`);
 
-  let downloaded = 0;
-  const regenerateIds: string[] = [];
+  // Step 1: Try to recover from Hedra dashboard (free, no credits)
+  const hedraUrls = await fetchHedraGenerations();
 
-  for (const card of externalCards) {
-    const localUrl = await downloadImageLocally(card.imageUrl!);
-    if (localUrl) {
-      await prisma.card.update({
-        where: { id: card.id },
-        data: { imageUrl: localUrl },
-      });
-      downloaded++;
-    } else {
-      // External URL expired/blocked — clear it and queue for regeneration
-      await prisma.card.update({
-        where: { id: card.id },
-        data: { imageUrl: null, imageStatus: "NONE" },
-      });
-      regenerateIds.push(card.id);
+  let recovered = 0;
+  let downloadedDirect = 0;
+  const needRegeneration: string[] = [];
+
+  for (const card of brokenCards) {
+    // Try Hedra recovery first (for external URLs)
+    if (card.imageUrl && card.imageUrl.startsWith("http")) {
+      const localUrl = await recoverImageFromHedra(card.imageUrl, hedraUrls);
+      if (localUrl) {
+        await prisma.card.update({
+          where: { id: card.id },
+          data: { imageUrl: localUrl },
+        });
+        recovered++;
+        continue;
+      }
+
+      // Try direct download as fallback (maybe URL works from server)
+      const directUrl = await downloadImageLocally(card.imageUrl);
+      if (directUrl) {
+        await prisma.card.update({
+          where: { id: card.id },
+          data: { imageUrl: directUrl },
+        });
+        downloadedDirect++;
+        continue;
+      }
     }
+
+    // For missing local files: try all Hedra URLs to re-download
+    // (We can't match by URL, but we've lost the file)
+    // Mark for regeneration as last resort
+    await prisma.card.update({
+      where: { id: card.id },
+      data: { imageUrl: null, imageStatus: "NONE" },
+    });
+    needRegeneration.push(card.id);
   }
 
-  console.log(`[Migration] ${downloaded} downloaded, ${regenerateIds.length} queued for regeneration`);
+  console.log(`[Migration] Results: ${recovered} recovered from Hedra, ${downloadedDirect} downloaded direct, ${needRegeneration.length} need regeneration`);
 
-  if (regenerateIds.length > 0 && process.env.HEDRA_API) {
-    generateImagesForCards(regenerateIds).catch((err) =>
+  // Step 2: Only regenerate what couldn't be recovered (costs credits)
+  if (needRegeneration.length > 0 && process.env.HEDRA_API) {
+    console.log(`[Migration] Regenerating ${needRegeneration.length} images (last resort)...`);
+    generateImagesForCards(needRegeneration).catch((err) =>
       console.error("[Migration] Regeneration error:", err)
     );
   }

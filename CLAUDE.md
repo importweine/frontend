@@ -123,19 +123,26 @@ GET            /uploads/*                     # Statische Dateien
 
 ## Wichtige Learnings / Bekannte Probleme
 
-1. **Externe Bild-URLs (imagedelivery.net) laufen ab** → 403 Forbidden. Deshalb werden Bilder jetzt immer lokal gespeichert. Die Migration beim Server-Start regeneriert abgelaufene Bilder automatisch.
+1. **KRITISCH: Railway Volumes für /uploads/** — Docker-Container sind **ephemeral**: bei jedem Deploy wird `/uploads/` gelöscht! Ohne ein Railway Volume gehen alle lokal gespeicherten Bilder verloren. **Lösung**: In Railway Dashboard → Service → Settings → Volumes → Mount Path: `/app/server/uploads`. Ohne Volume versucht die Migration beim Start Bilder aus Hedra wiederherzustellen.
 
-2. **CORS auf Mobilgeräten** blockiert externe Bild-URLs. Der `/api/image-proxy` Endpoint und lokale Speicherung lösen das.
+2. **Externe Bild-URLs (imagedelivery.net) laufen ab** → 403 Forbidden. Deshalb werden Bilder jetzt immer lokal gespeichert. Die Migration beim Server-Start:
+   - Erkennt kaputte externe URLs UND fehlende lokale Dateien
+   - Versucht zuerst Recovery aus dem Hedra Dashboard (kostenlos)
+   - Erst als letztes Mittel: Neugenerierung (verbraucht Credits)
 
-3. **Prisma db push** läuft automatisch beim Server-Start (`server/src/index.ts`). Kein manuelles Migrieren nötig.
+3. **CORS auf Mobilgeräten** blockiert externe Bild-URLs. Der `/api/image-proxy` Endpoint und lokale Speicherung lösen das.
 
-4. **Vite Dev Proxy** leitet nur `/api` weiter (siehe `client/vite.config.ts`). `/uploads` wird NICHT geproxied — im Dev-Modus muss man den vollen Server-URL verwenden oder den Proxy erweitern.
+4. **Prisma db push** läuft automatisch beim Server-Start (`server/src/index.ts`). Kein manuelles Migrieren nötig.
 
-5. **Multer speichert in `server/uploads/`**. Das Verzeichnis wird automatisch erstellt. In Docker wird es bei jedem Deploy zurückgesetzt — für Persistenz ggf. Railway Volume mounten.
+5. **Vite Dev Proxy** leitet nur `/api` weiter (siehe `client/vite.config.ts`). `/uploads` wird NICHT geproxied — im Dev-Modus muss man den vollen Server-URL verwenden oder den Proxy erweitern.
 
-6. **Bildgenerierung braucht HEDRA_API** env var. Ohne wird sie übersprungen (kein Fehler).
+6. **Multer speichert in `server/uploads/`**. Das Verzeichnis wird automatisch erstellt.
 
-7. **PDF-Verarbeitung**: Große PDFs werden in 30KB-Chunks aufgeteilt. Seitenzuordnung wird per `[Seite X]` Marker im Text getrackt.
+7. **Bildgenerierung braucht HEDRA_API** env var. Ohne wird sie übersprungen (kein Fehler).
+
+8. **PDF-Verarbeitung**: Große PDFs werden in 30KB-Chunks aufgeteilt. Seitenzuordnung wird per `[Seite X]` Marker im Text getrackt.
+
+9. **Debug-Endpoints**: `GET /api/debug/images` zeigt alle Bild-Status. `POST /api/migrate-images` triggert Migration manuell.
 
 ## Datei-Referenz (wichtigste Dateien)
 
