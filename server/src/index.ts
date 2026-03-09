@@ -70,6 +70,69 @@ app.get("/api/image-proxy", async (req, res) => {
   }
 });
 
+// Manual migration trigger + debug info
+app.post("/api/migrate-images", async (_req, res) => {
+  try {
+    const { PrismaClient } = await import("@prisma/client");
+    const prisma = new PrismaClient();
+    const cards = await prisma.card.findMany({
+      where: { imageUrl: { not: null } },
+      select: { id: true, imageUrl: true, imageStatus: true },
+    });
+    const external = cards.filter((c) => c.imageUrl?.startsWith("http"));
+    const local = cards.filter((c) => c.imageUrl?.startsWith("/uploads"));
+    await prisma.$disconnect();
+
+    res.json({
+      total: cards.length,
+      external: external.length,
+      local: local.length,
+      sampleExternal: external.slice(0, 3).map((c) => ({ id: c.id, url: c.imageUrl?.substring(0, 80) })),
+      hedraApiSet: !!process.env.HEDRA_API,
+      migrating: true,
+    });
+
+    // Trigger migration in background
+    migrateExternalImages().catch((err) =>
+      console.error("[Migration] Manual trigger failed:", err)
+    );
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
+});
+
+// Debug: check card image status
+app.get("/api/debug/images", async (_req, res) => {
+  try {
+    const { PrismaClient } = await import("@prisma/client");
+    const prisma = new PrismaClient();
+    const cards = await prisma.card.findMany({
+      where: { imageUrl: { not: null } },
+      select: { id: true, imageUrl: true, imageStatus: true, front: true },
+    });
+    await prisma.$disconnect();
+
+    const summary = {
+      total: cards.length,
+      external: cards.filter((c) => c.imageUrl?.startsWith("http")).length,
+      local: cards.filter((c) => c.imageUrl?.startsWith("/uploads")).length,
+      byStatus: cards.reduce((acc, c) => {
+        acc[c.imageStatus] = (acc[c.imageStatus] || 0) + 1;
+        return acc;
+      }, {} as Record<string, number>),
+      cards: cards.map((c) => ({
+        id: c.id,
+        front: c.front.substring(0, 50),
+        imageUrl: c.imageUrl?.substring(0, 100),
+        imageStatus: c.imageStatus,
+      })),
+    };
+    res.json(summary);
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
+});
+
 // API routes
 app.use("/api/decks", decksRouter);
 app.use("/api/cards", cardsRouter);
