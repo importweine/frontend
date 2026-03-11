@@ -23,7 +23,23 @@ router.get("/", async (req: Request, res: Response) => {
     const cards = await prisma.card.findMany({
       where,
       orderBy: { nextReview: "asc" },
-      include: {
+      select: {
+        id: true,
+        deckId: true,
+        front: true,
+        back: true,
+        imageUrl: true,
+        imageStatus: true,
+        imageMimeType: true,
+        // imageData excluded — too large for list responses (served via /api/cards/:id/image)
+        source: true,
+        sourcePages: true,
+        nextReview: true,
+        interval: true,
+        easeFactor: true,
+        repetitions: true,
+        createdAt: true,
+        updatedAt: true,
         deck: {
           select: { id: true, name: true, color: true },
         },

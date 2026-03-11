@@ -693,21 +693,14 @@ export async function migrateExternalImages(): Promise<void> {
       }
     }
 
-    // Last resort: mark for regeneration
+    // Last resort: mark as FAILED so user can manually trigger regeneration
+    // Do NOT auto-regenerate — this wastes credits on every deploy
     await prisma.card.update({
       where: { id: card.id },
-      data: { imageUrl: null, imageStatus: "NONE" },
+      data: { imageUrl: null, imageStatus: "FAILED" },
     });
     needRegeneration.push(card.id);
   }
 
-  console.log(`[Migration] Results: ${restoredFromDb} from DB, ${recovered} from Hedra, ${downloadedDirect} direct download, ${needRegeneration.length} need regeneration`);
-
-  // Only regenerate what couldn't be recovered (costs credits)
-  if (needRegeneration.length > 0 && process.env.HEDRA_API) {
-    console.log(`[Migration] Regenerating ${needRegeneration.length} images (last resort)...`);
-    generateImagesForCards(needRegeneration).catch((err) =>
-      console.error("[Migration] Regeneration error:", err)
-    );
-  }
+  console.log(`[Migration] Results: ${restoredFromDb} from DB, ${recovered} from Hedra, ${downloadedDirect} direct download, ${needRegeneration.length} unrecoverable (marked FAILED)`);
 }

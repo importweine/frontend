@@ -71,7 +71,7 @@ app.get("/api/image-proxy", async (req, res) => {
   }
 });
 
-// Serve image from DB (fallback when local file is missing, e.g. after Docker rebuild)
+// Serve card image: tries local file first, then DB-stored imageData (survives deploys)
 app.get("/api/cards/:id/image", async (req, res) => {
   try {
     const card = await prisma.card.findUnique({
@@ -81,22 +81,24 @@ app.get("/api/cards/:id/image", async (req, res) => {
 
     if (!card) return res.status(404).json({ error: "Card not found" });
 
-    // Try local file first
+    // Try local file first (fastest)
     if (card.imageUrl?.startsWith("/uploads/")) {
       const filePath = path.join(__dirname, "..", card.imageUrl);
       if (fs.existsSync(filePath)) {
+        res.setHeader("Cache-Control", "public, max-age=604800"); // 7 days
         return res.sendFile(filePath);
       }
     }
 
-    // Fallback: serve from DB
+    // Fallback: serve from DB (survives Docker rebuilds without Volume)
     if (card.imageData && card.imageData.length > 0) {
-      res.setHeader("Content-Type", card.imageMimeType || "image/png");
-      res.setHeader("Cache-Control", "public, max-age=86400");
+      const mimeType = card.imageMimeType || "image/png";
+      res.setHeader("Content-Type", mimeType);
+      res.setHeader("Cache-Control", "public, max-age=604800"); // 7 days
       return res.send(Buffer.from(card.imageData));
     }
 
-    return res.status(404).json({ error: "No image data" });
+    return res.status(404).json({ error: "No image data available" });
   } catch {
     res.status(500).json({ error: "Failed to serve image" });
   }

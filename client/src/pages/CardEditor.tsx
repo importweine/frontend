@@ -9,7 +9,7 @@ import {
   X,
   Brain,
 } from "lucide-react";
-import { getDeck, getCards, createCard, updateCard, getImageSrc, getImageFallbackSrc } from "../api";
+import { getDeck, getCards, createCard, updateCard, getImageSrc } from "../api";
 import type { Deck, Card } from "../types";
 
 export default function CardEditor() {
@@ -42,7 +42,7 @@ export default function CardEditor() {
             setFront(card.front);
             setBack(card.back);
             setImageUrl(card.imageUrl);
-            setImagePreview(getImageSrc(card.imageUrl) || getImageFallbackSrc(card.id));
+            setImagePreview(getImageSrc(card.imageUrl, card.id));
           } else {
             navigate(`/deck/${deckId}`);
           }

@@ -8,7 +8,7 @@ import {
   Brain,
   Keyboard,
 } from "lucide-react";
-import { getDeck, getCards, reviewCard, getImageSrc, getImageFallbackSrc } from "../api";
+import { getDeck, getCards, reviewCard, getImageSrc } from "../api";
 import type { Deck, Card } from "../types";
 
 export default function StudyMode() {
@@ -65,7 +65,7 @@ export default function StudyMode() {
     const PRELOAD_AHEAD = 3;
     for (let i = currentIndex; i < Math.min(currentIndex + PRELOAD_AHEAD, dueCards.length); i++) {
       const card = dueCards[i];
-      const imgSrc = getImageSrc(card?.imageUrl);
+      const imgSrc = getImageSrc(card?.imageUrl, card?.id);
       if (imgSrc && !preloadedImages.current.has(card.id)) {
         const img = new Image();
         img.src = imgSrc;
@@ -94,7 +94,7 @@ export default function StudyMode() {
               if (fresh && fresh.imageUrl && !oldCard.imageUrl) {
                 // Preload newly available image
                 const img = new Image();
-                img.src = getImageSrc(fresh.imageUrl) || fresh.imageUrl;
+                img.src = getImageSrc(fresh.imageUrl, fresh.id) || fresh.imageUrl;
                 preloadedImages.current.add(fresh.id);
                 return { ...oldCard, imageUrl: fresh.imageUrl, imageStatus: fresh.imageStatus };
               }
@@ -354,17 +354,12 @@ export default function StudyMode() {
               </p>
               {currentCard.imageUrl ? (
                 <img
-                  src={getImageSrc(currentCard.imageUrl) || currentCard.imageUrl}
+                  src={getImageSrc(currentCard.imageUrl, currentCard.id) || currentCard.imageUrl}
                   alt="Kartenabbildung"
                   className="mt-6 max-h-48 rounded-xl object-contain"
                   onError={(e) => {
-                    const img = e.target as HTMLImageElement;
-                    const fallback = getImageFallbackSrc(currentCard.id);
-                    if (!img.src.includes("/api/cards/")) {
-                      img.src = fallback;
-                    } else {
-                      img.style.display = 'none';
-                    }
+                    // Hide image if the DB-backed endpoint also fails
+                    (e.target as HTMLImageElement).style.display = 'none';
                   }}
                 />
               ) : (currentCard.imageStatus === "PENDING" || currentCard.imageStatus === "GENERATING") ? (

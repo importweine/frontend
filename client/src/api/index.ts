@@ -4,11 +4,17 @@ const API_BASE = "/api";
 
 /**
  * Returns a display-safe image URL.
- * External URLs (http...) are routed through our server proxy to avoid CORS.
- * Local /uploads paths are returned as-is.
+ * Always serves through /api/cards/:id/image for reliability.
+ * This endpoint checks local file first, then falls back to DB-stored imageData.
+ * This ensures images survive Docker rebuilds without needing a Volume mount.
  */
 export function getImageSrc(imageUrl: string | null | undefined, cardId?: string): string | null {
   if (!imageUrl) return null;
+  // Always serve through the DB-backed endpoint when we have a cardId
+  if (cardId) {
+    return `${API_BASE}/cards/${cardId}/image`;
+  }
+  // Fallback for cases without cardId (shouldn't happen in normal usage)
   if (imageUrl.startsWith("http")) {
     return `${API_BASE}/image-proxy?url=${encodeURIComponent(imageUrl)}`;
   }
