@@ -138,7 +138,7 @@ export default function StudyMode() {
       setReviewing(true);
 
       const statKey =
-        quality === 1
+        quality <= 1
           ? "again"
           : quality === 2
           ? "hard"
@@ -154,7 +154,13 @@ export default function StudyMode() {
           [statKey]: prev[statKey] + 1,
         }));
 
-        if (currentIndex + 1 >= dueCards.length) {
+        if (quality < 3) {
+          // Failed card: re-insert at the end of the queue so user sees it again
+          setDueCards((prev) => [...prev, currentCard]);
+          // Always advance — the re-inserted card will appear later
+          setCurrentIndex((prev) => prev + 1);
+          setFlipped(false);
+        } else if (currentIndex + 1 >= dueCards.length) {
           setCompleted(true);
         } else {
           setCurrentIndex((prev) => prev + 1);
@@ -182,7 +188,7 @@ export default function StudyMode() {
       } else if (flipped && !reviewing) {
         switch (e.key) {
           case "1":
-            handleRate(1);
+            handleRate(0);
             break;
           case "2":
             handleRate(2);
@@ -392,7 +398,7 @@ export default function StudyMode() {
           </p>
           <div className="grid grid-cols-4 gap-2 md:gap-3">
             <button
-              onClick={() => handleRate(1)}
+              onClick={() => handleRate(0)}
               disabled={reviewing}
               className="flex flex-col items-center gap-1 px-3 py-3 md:py-4 bg-red-50 text-red-700 rounded-xl hover:bg-red-100 active:bg-red-200 transition-default disabled:opacity-50 border border-red-100"
             >

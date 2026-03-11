@@ -183,7 +183,12 @@ router.post("/:id/review", async (req: Request, res: Response) => {
 
     // Calculate next review date
     const nextReview = new Date();
-    nextReview.setDate(nextReview.getDate() + interval);
+    if (interval === 0) {
+      // Failed cards should be immediately reviewable in the same session
+      nextReview.setMinutes(nextReview.getMinutes() - 1);
+    } else {
+      nextReview.setDate(nextReview.getDate() + interval);
+    }
 
     const updatedCard = await prisma.card.update({
       where: { id },
